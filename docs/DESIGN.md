@@ -1,0 +1,108 @@
+# KangPos — design
+
+KangPos is an API client built on Larik SQL Studio's layout and stack. Name: "Kang Pos", Indonesian slang for the postman.
+
+It keeps Larik's model of **workspaces → tabs**, but a new tab starts from a **template** instead of a database.
+
+## Core idea
+
+| Concept | What it is |
+|---|---|
+| **Space** | A workspace (same as Larik). Owns its templates, environments and tabs. Has a colour. |
+| **Template** | A reusable request definition: method, URL, headers, query, body, auth, and **declared params** (name, default, required, description). Grouped by folder. |
+| **Tab** | One use of a template: a full copy of the template's request plus the values the user typed in. |
+| **Environment** | Named set of variables per space (`baseUrl`, `token`, …). One is active per space. |
+
+### Rules
+
+1. **A tab is a copy.** Editing a tab never changes its template. The template changes only through explicit actions:
+   - **Update template** (Ctrl+S, when the tab came from a template)
+   - **Save as new template**
+2. **A tab is a snapshot.** It copies the template when it is created. Later template edits do not reach existing tabs.
+3. **Two kinds of placeholder, one syntax: `{{name}}`.**
+   - If `name` is one of the tab's **declared params**, the value comes from the tab's params form.
+   - Otherwise it comes from the active **environment**.
+   - Postman dynamic variables are supported: `{{$guid}}`, `{{$randomUUID}}`, `{{$timestamp}}`, `{{$isoTimestamp}}`, `{{$randomInt}}`.
+   - The editor colours them differently: params in the space colour, env vars in blue, unresolved names in red.
+4. **Inputs form.** Declared params show as a form at the top of the tab. Send is blocked while a required one is empty.
+   - The UI calls them **Inputs**, not "Params", because Postman's "Params" means query parameters. An input is only sent where a `{{name}}` refers to it.
+   - Inputs that nothing refers to are tagged *unused*, and a warning offers **Add as query params** (adds `name={{name}}` rows). Send also shows a toast for unused inputs that have values.
+5. **Tab names come from the template plus a key value,** e.g. `Get contact · 10045`. The key value is the first required param that has a value, or else the first param that has one. Renaming a tab by hand (double-click) pins its title.
+6. **The template picker is a command palette.** Ctrl+T / Ctrl+N → type to filter → Enter. **Blank request** is always the first option.
+7. **No collection tree.** Templates are grouped by `folder` (a path such as `Contacts / Admin`) in the picker and in the sidebar's Templates view.
+
+## Import
+
+| Source | Result |
+|---|---|
+| Postman collection v2.0/v2.1 (JSON) | One template per request. Folder = item path. Path variables (`:id`) become params. Collection/folder auth is inherited. Collection variables become an environment. |
+| Postman environment (JSON) | One environment. `secret` values are kept, but masked in the UI. |
+| OpenAPI 3.x / Swagger 2.0 (JSON or YAML) | One template per operation. Folder = first tag. `{{baseUrl}}` + path, with `{id}` turned into `{{id}}`. Path params and required query/header params become required params. The JSON body is generated from the schema (example → default → enum → type), and required top-level string fields become params. Security schemes map to auth with env vars. An environment named after the API gets `baseUrl` from `servers[0]` plus the auth variables. |
+
+Unsupported pieces (Postman pre-request/test scripts, file uploads in Postman collections, etc.) are reported as warnings after an import, never silently dropped.
+
+## Architecture
+
+Same stack as Larik: **Tauri 2 + Rust**, **React 19 + TypeScript + Vite**, **Tailwind 4**, **Zustand** (slices), **Monaco**, **SQLite** (`rusqlite`).
+
+- **Rust is thin.** It handles SQLite persistence, sends HTTP (`reqwest` + rustls, so there's no CORS, and each request can set a timeout, redirect policy and TLS verification), handles cancellation, and reads files for import (with a size limit).
+- **TypeScript owns request semantics:** variable resolution, auth → headers, URL-encoded bodies, importers, cURL export. These are pure functions with unit tests.
+- Request definitions are stored as one JSON column (`request`) on templates and tabs, so the request shape can change without SQLite migrations.
+
+### Storage (SQLite, `%APPDATA%/com.kangpos.app/kangpos.db`)
+
+```
+spaces(id, name, color, active_environment_id, sort_order, created_at, updated_at)
+environments(id, space_id, name, variables JSON, sort_order, created_at, updated_at)
+templates(id, space_id, name, folder, request JSON, sort_order, created_at, updated_at)
+tabs(id, space_id, template_id NULL, template_name NULL, custom_title NULL,
+     request JSON, param_values JSON, response JSON NULL, is_pinned, sort_order, created_at, updated_at)
+app_state(key, value)            -- last space, last tab, theme, sidebar width
+```
+
+`template_id` is kept only for "Update template". If the template has been deleted, the tab still works.
+
+### RequestSpec (JSON)
+
+```ts
+{
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD' | 'OPTIONS',
+  url: string,                                  // may contain {{vars}}
+  query:   { key, value, enabled }[],
+  headers: { key, value, enabled }[],
+  body: { type: 'none' | 'json' | 'text' | 'xml' | 'form-urlencoded' | 'multipart',
+          raw: string, fields: { key, value, enabled, kind: 'text' | 'file' }[] },
+  auth: { type: 'none' } | { type: 'bearer', token } | { type: 'basic', username, password }
+      | { type: 'apikey', key, value, in: 'header' | 'query' },
+  params: { name, default, required, description }[],
+}
+```
+
+### Send flow
+
+1. Resolve `{{vars}}` everywhere (params → env → dynamic).
+2. Apply auth (adds a header or a query entry).
+3. Build the final URL (base URL + enabled query rows) and the body (`form-urlencoded` is encoded in TS; `multipart` is sent as fields to Rust).
+4. `send_request` in Rust → `{ status, statusText, headers, body | bodyBase64, size, durationMs }`.
+5. The response is saved on the tab. Bodies over 2 MB are truncated in storage only.
+
+## MVP scope
+
+- Spaces (create, rename, recolour, delete, switch)
+- Environments (CRUD, active per space, editor modal)
+- Templates (picker, sidebar list grouped by folder, rename/move/delete, save/update from tab)
+- Tabs (create from template/blank, params form, autosave, rename, pin, close, restore on restart)
+- Request editor: method + URL bar, Params / Query / Headers / Body / Auth sections
+- Response viewer: status, time, size, pretty body (Monaco), headers
+- Import: Postman collection, Postman environment, OpenAPI 3 / Swagger 2 (JSON/YAML)
+- Copy as cURL
+- Shortcuts: Ctrl+T/N (picker), Ctrl+Enter (send), Ctrl+S (update/save template), Ctrl+W (close tab), Ctrl+Tab / Ctrl+Shift+Tab
+
+## Later
+
+- Request history per tab
+- Pre-request scripts / response tests
+- Chained values (pull `token` from a login response into the environment)
+- Export to Postman collection / OpenAPI
+- Bulk run: one template × rows of params (CSV)
+- Secrets in the OS keychain (Larik already does this for passwords)

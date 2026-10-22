@@ -1,0 +1,21 @@
+# https://taskfile.dev
+
+version: '3'
+
+tasks:
+  default:
+    desc: Show all available tasks
+    cmds:
+      - task --list-all
+
+  run:
+    desc: Run the Tauri application in development mode
+    cmds:
+      - CARGO_HTTP_CHECK_REVOKE=false npm run tauri dev
+    silent: true
+
+  build:
+    desc: Build the Tauri application
+    cmds:
+      - CARGO_HTTP_CHECK_REVOKE=false npm run tauri build
+    silent: true

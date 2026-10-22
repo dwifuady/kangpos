@@ -1,0 +1,36 @@
+[package]
+name = "kangpos"
+version = "0.1.0"
+description = "Template-first API client"
+authors = ["Dwi Fuady"]
+edition = "2021"
+
+[lib]
+# The `_lib` suffix keeps the lib name distinct from the bin name (cargo#8519 on Windows).
+name = "kangpos_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2.6", features = [] }
+tauri-plugin-dialog = "2.6.0"
+tauri-plugin-clipboard-manager = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.33", features = ["bundled"] }
+thiserror = "2"
+directories = "5"
+uuid = { version = "1", features = ["v4"] }
+tokio = { version = "1", features = ["full"] }
+parking_lot = "0.12"
+base64 = "0.22"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip", "brotli", "deflate", "multipart", "http2", "charset"] }
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+
+[lints.rust]
+unsafe_code = "deny"

@@ -1,0 +1,188 @@
+// Shared types. Shapes stored as JSON in SQLite (RequestSpec, EnvVariable[],
+// ParamValues, StoredResponse) are owned by the frontend.
+
+export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD' | 'OPTIONS';
+
+export const HTTP_METHODS: HttpMethod[] = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
+
+export interface KeyValue {
+  key: string;
+  value: string;
+  enabled: boolean;
+  description?: string;
+}
+
+export interface BodyField extends KeyValue {
+  kind: 'text' | 'file';
+}
+
+export type BodyType = 'none' | 'json' | 'text' | 'xml' | 'form-urlencoded' | 'multipart';
+
+export interface RequestBody {
+  type: BodyType;
+  raw: string;
+  fields: BodyField[];
+}
+
+export type AuthSpec =
+  | { type: 'none' }
+  | { type: 'bearer'; token: string }
+  | { type: 'basic'; username: string; password: string }
+  | { type: 'apikey'; key: string; value: string; in: 'header' | 'query' };
+
+/** A value the user fills in per tab; referenced as {{name}}. */
+export interface TemplateParam {
+  name: string;
+  default: string;
+  required: boolean;
+  description?: string;
+}
+
+export interface RequestSpec {
+  method: HttpMethod;
+  url: string;
+  query: KeyValue[];
+  headers: KeyValue[];
+  body: RequestBody;
+  auth: AuthSpec;
+  params: TemplateParam[];
+}
+
+export type ParamValues = Record<string, string>;
+
+export interface EnvVariable {
+  key: string;
+  value: string;
+  enabled: boolean;
+  secret?: boolean;
+}
+
+export interface Space {
+  id: string;
+  name: string;
+  color: string | null;
+  active_environment_id: string | null;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Environment {
+  id: string;
+  space_id: string;
+  name: string;
+  variables: EnvVariable[];
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Template {
+  id: string;
+  space_id: string;
+  name: string;
+  folder: string;
+  request: RequestSpec;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface HttpResponse {
+  status: number;
+  statusText: string;
+  httpVersion: string;
+  headers: [string, string][];
+  body: string | null;
+  bodyBase64: string | null;
+  contentType: string | null;
+  sizeBytes: number;
+  durationMs: number;
+  truncated: boolean;
+  finalUrl: string;
+}
+
+/** What a tab remembers about its last send. */
+export interface StoredResponse {
+  response?: HttpResponse;
+  error?: string;
+  sentAt: string;
+  method: string;
+  url: string;
+}
+
+export interface Tab {
+  id: string;
+  space_id: string;
+  template_id: string | null;
+  template_name: string | null;
+  custom_title: string | null;
+  request: RequestSpec;
+  param_values: ParamValues;
+  response: StoredResponse | null;
+  is_pinned: boolean;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateTemplateInput {
+  space_id: string;
+  name: string;
+  folder: string;
+  request: RequestSpec;
+}
+
+export interface SendOptions {
+  timeoutMs: number;
+  followRedirects: boolean;
+  verifyTls: boolean;
+}
+
+export type WireBody =
+  | { type: 'none' }
+  | { type: 'raw'; content: string }
+  | { type: 'multipart'; fields: { name: string; value: string; kind: 'text' | 'file' }[] };
+
+export interface SendRequestInput {
+  requestId: string;
+  method: string;
+  url: string;
+  headers: [string, string][];
+  body: WireBody;
+  options: SendOptions;
+}
+
+export function emptyRequest(): RequestSpec {
+  return {
+    method: 'GET',
+    url: '',
+    query: [],
+    headers: [],
+    body: { type: 'none', raw: '', fields: [] },
+    auth: { type: 'none' },
+    params: [],
+  };
+}
+
+/**
+ * Fill in any fields missing from a stored request (older rows, imports),
+ * so the UI can rely on the full shape.
+ */
+export function normalizeRequest(input: Partial<RequestSpec> | null | undefined): RequestSpec {
+  const base = emptyRequest();
+  if (!input || typeof input !== 'object') return base;
+  return {
+    method: (input.method && HTTP_METHODS.includes(input.method) ? input.method : base.method),
+    url: input.url ?? '',
+    query: Array.isArray(input.query) ? input.query : [],
+    headers: Array.isArray(input.headers) ? input.headers : [],
+    body: {
+      type: input.body?.type ?? 'none',
+      raw: input.body?.raw ?? '',
+      fields: Array.isArray(input.body?.fields) ? input.body!.fields : [],
+    },
+    auth: input.auth?.type ? input.auth : { type: 'none' },
+    params: Array.isArray(input.params) ? input.params : [],
+  };
+}
