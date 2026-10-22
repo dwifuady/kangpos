@@ -53,3 +53,18 @@ cd src-tauri && cargo test       # storage + HTTP (real loopback server)
 
 SQLite at `%APPDATA%\kangpos\KangPos\data\kangpos.db`. Environment values marked secret are masked
 on screen only; they are stored in plain text in that file.
+
+### Sharing templates through git
+
+Open a space's settings (pencil icon in the space menu) and choose **Link to folder…**. Pick an
+empty folder, for example inside a git repository. KangPos writes the space's templates and
+environments there as YAML (`kangpos.yaml`, one file per template, `environments/*.yaml`) and keeps
+them in sync both ways. Edits from `git pull` or another editor load automatically.
+
+- Tabs, responses and **secret** environment values never go into the folder.
+- A teammate clones the repository and uses **Open workspace folder…** in the space menu to add it
+  as a space.
+- A file that can't be read (e.g. a merge conflict) shows a warning in the sidebar; its template
+  keeps its last good version until the file is fixed.
+
+See [docs/DESIGN.md](docs/DESIGN.md#folder-sync-optional-per-space) for the file format.

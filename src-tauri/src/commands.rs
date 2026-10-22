@@ -5,7 +5,9 @@ use crate::storage::{
     CreateTabInput, CreateTemplateInput, DatabaseManager, Environment, Space, StorageError, Tab,
     Template, UpdateEnvironmentInput, UpdateSpaceInput, UpdateTabInput, UpdateTemplateInput,
 };
+use crate::sync::{self, SyncError, SyncManager, SyncStatus};
 use serde_json::Value;
+use std::path::Path;
 use std::sync::Arc;
 use tauri::State;
 
@@ -15,6 +17,7 @@ const MAX_IMPORT_BYTES: u64 = 20 * 1024 * 1024;
 pub struct AppState {
     pub db: Arc<DatabaseManager>,
     pub http: Arc<HttpState>,
+    pub sync: Arc<SyncManager>,
 }
 
 /// Typed IPC error, serialized as `{ code, message }` for the frontend.
@@ -25,6 +28,8 @@ pub enum ApiError {
     Validation(String),
     Http(String),
     NotFound(String),
+    /// Saved in the app, but the space's folder could not be updated.
+    Sync(String),
 }
 
 impl From<StorageError> for ApiError {
@@ -36,7 +41,22 @@ impl From<StorageError> for ApiError {
     }
 }
 
+impl From<SyncError> for ApiError {
+    fn from(err: SyncError) -> Self {
+        match err {
+            SyncError::Invalid(msg) => ApiError::Validation(msg),
+            SyncError::Storage(e) => e.into(),
+            other => ApiError::Sync(other.to_string()),
+        }
+    }
+}
+
 type ApiResult<T> = Result<T, ApiError>;
+
+/// Report a folder write failure without losing the database change.
+fn file_error(e: SyncError) -> ApiError {
+    ApiError::Sync(format!("Saved, but the workspace folder could not be updated: {e}"))
+}
 
 // ---- Spaces ----
 
@@ -64,12 +84,66 @@ pub async fn update_space(
     id: String,
     input: UpdateSpaceInput,
 ) -> ApiResult<Space> {
-    Ok(state.db.update_space(&id, input)?)
+    state.sync.exclusive(|| {
+        let shared = input.name.is_some() || input.color.is_some();
+        let space = state.db.update_space(&id, input)?;
+        if let (true, Some(dir)) = (shared, &space.sync_dir) {
+            sync::write_workspace_file(Path::new(dir), &space).map_err(file_error)?;
+        }
+        Ok(space)
+    })
 }
 
 #[tauri::command]
 pub async fn delete_space(state: State<'_, AppState>, id: String) -> ApiResult<()> {
+    state.sync.stop(&id);
     Ok(state.db.delete_space(&id)?)
+}
+
+// ---- Folder sync ----
+
+/// Link a space to a folder: writes its templates and environments there and watches it.
+#[tauri::command]
+pub async fn link_space_folder(
+    state: State<'_, AppState>,
+    space_id: String,
+    path: String,
+) -> ApiResult<Space> {
+    let space = state.sync.exclusive(|| sync::link(&state.db, &space_id, &path))?;
+    state.sync.start(&space_id)?;
+    Ok(space)
+}
+
+/// Stop syncing. The space keeps everything; the folder is left as it is.
+#[tauri::command]
+pub async fn unlink_space_folder(state: State<'_, AppState>, space_id: String) -> ApiResult<Space> {
+    state.sync.stop(&space_id);
+    Ok(state.sync.exclusive(|| sync::unlink(&state.db, &space_id))?)
+}
+
+/// Add a folder that already holds a KangPos workspace (e.g. a git clone) as a new space.
+#[tauri::command]
+pub async fn open_workspace_folder(state: State<'_, AppState>, path: String) -> ApiResult<Space> {
+    let (space, _) = state.sync.exclusive(|| sync::open_workspace(&state.db, &path))?;
+    state.sync.start(&space.id)?;
+    Ok(space)
+}
+
+#[tauri::command]
+pub async fn get_sync_status(
+    state: State<'_, AppState>,
+    space_id: String,
+) -> ApiResult<Option<SyncStatus>> {
+    Ok(state.sync.status(&space_id))
+}
+
+/// Re-read the folder now (e.g. after fixing a broken file, or when it was missing).
+#[tauri::command]
+pub async fn reload_space_folder(
+    state: State<'_, AppState>,
+    space_id: String,
+) -> ApiResult<SyncStatus> {
+    Ok(state.sync.start(&space_id)?)
 }
 
 // ---- Environments ----
@@ -89,7 +163,11 @@ pub async fn create_environment(
     name: String,
     variables: Value,
 ) -> ApiResult<Environment> {
-    Ok(state.db.create_environment(&space_id, &name, &variables)?)
+    state.sync.exclusive(|| {
+        let env = state.db.create_environment(&space_id, &name, &variables)?;
+        sync::write_environment(&state.db, &env.id).map_err(file_error)?;
+        Ok(env)
+    })
 }
 
 #[tauri::command]
@@ -98,12 +176,19 @@ pub async fn update_environment(
     id: String,
     input: UpdateEnvironmentInput,
 ) -> ApiResult<Environment> {
-    Ok(state.db.update_environment(&id, input)?)
+    state.sync.exclusive(|| {
+        let env = state.db.update_environment(&id, input)?;
+        sync::write_environment(&state.db, &env.id).map_err(file_error)?;
+        Ok(env)
+    })
 }
 
 #[tauri::command]
 pub async fn delete_environment(state: State<'_, AppState>, id: String) -> ApiResult<()> {
-    Ok(state.db.delete_environment(&id)?)
+    state.sync.exclusive(|| {
+        sync::remove_environment(&state.db, &id).map_err(file_error)?;
+        Ok(state.db.delete_environment(&id)?)
+    })
 }
 
 // ---- Templates ----
@@ -121,7 +206,13 @@ pub async fn create_templates(
     state: State<'_, AppState>,
     inputs: Vec<CreateTemplateInput>,
 ) -> ApiResult<Vec<Template>> {
-    Ok(state.db.create_templates(inputs)?)
+    state.sync.exclusive(|| {
+        let created = state.db.create_templates(inputs)?;
+        for tpl in &created {
+            sync::write_template(&state.db, &tpl.id).map_err(file_error)?;
+        }
+        Ok(created)
+    })
 }
 
 #[tauri::command]
@@ -130,12 +221,19 @@ pub async fn update_template(
     id: String,
     input: UpdateTemplateInput,
 ) -> ApiResult<Template> {
-    Ok(state.db.update_template(&id, input)?)
+    state.sync.exclusive(|| {
+        let tpl = state.db.update_template(&id, input)?;
+        sync::write_template(&state.db, &tpl.id).map_err(file_error)?;
+        Ok(tpl)
+    })
 }
 
 #[tauri::command]
 pub async fn delete_template(state: State<'_, AppState>, id: String) -> ApiResult<()> {
-    Ok(state.db.delete_template(&id)?)
+    state.sync.exclusive(|| {
+        sync::remove_template(&state.db, &id).map_err(file_error)?;
+        Ok(state.db.delete_template(&id)?)
+    })
 }
 
 // ---- Tabs ----

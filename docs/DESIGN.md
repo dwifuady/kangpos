@@ -55,9 +55,9 @@ Same stack as Larik: **Tauri 2 + Rust**, **React 19 + TypeScript + Vite**, **Tai
 ### Storage (SQLite, `%APPDATA%/com.kangpos.app/kangpos.db`)
 
 ```
-spaces(id, name, color, active_environment_id, sort_order, created_at, updated_at)
-environments(id, space_id, name, variables JSON, sort_order, created_at, updated_at)
-templates(id, space_id, name, folder, request JSON, sort_order, created_at, updated_at)
+spaces(id, name, color, active_environment_id, sync_dir NULL, sort_order, created_at, updated_at)
+environments(id, space_id, name, variables JSON, file_path NULL, sort_order, created_at, updated_at)
+templates(id, space_id, name, folder, request JSON, file_path NULL, sort_order, created_at, updated_at)
 tabs(id, space_id, template_id NULL, template_name NULL, custom_title NULL,
      request JSON, param_values JSON, response JSON NULL, is_pinned, sort_order, created_at, updated_at)
 app_state(key, value)            -- last space, last tab, theme, sidebar width
@@ -88,6 +88,28 @@ app_state(key, value)            -- last space, last tab, theme, sidebar width
 3. Build the final URL (base URL + enabled query rows) and the body (`form-urlencoded` is encoded in TS; `multipart` is sent as fields to Rust).
 4. `send_request` in Rust → `{ status, statusText, headers, body | bodyBase64, size, durationMs }`.
 5. The response is saved on the tab. Bodies over 2 MB are truncated in storage only.
+
+## Folder sync (optional, per space)
+
+By default everything lives in SQLite. A space can be **linked to a folder** (space dialog → *Link to folder…*) so its templates and environments are kept as YAML files that can live in git. This works like Yaak's directory sync.
+
+| In the folder (shared) | Only in SQLite (personal) |
+|---|---|
+| Templates, environments (non-secret values), space name and colour | Tabs, filled-in inputs, responses, secret values, UI state |
+
+```
+kangpos.yaml                     kangpos: 1, name, color
+Contacts/Admin/get-contact.yaml  one file per template; directories = template folder
+environments/dev.yaml            one file per environment; secret values left out
+```
+
+- **Once linked, the folder is the source of truth** and SQLite is a cache. Rust (`src-tauri/src/sync.rs`) watches the folder (`notify`, 400 ms debounce), reloads what changed and emits `kangpos://sync`. The UI then reloads templates and environments. Open tabs are snapshots, so a `git pull` never changes them.
+- **Writes go both ways under one lock:** a change in the app updates SQLite, then writes the file (temp file + rename). Renaming or moving a template moves its file and removes empty folders. Reloading after our own write finds nothing to change, so there is no echo loop.
+- **Stable diffs:** fixed key order, empty values left out (`body`/`auth` of type none, empty lists), JSON bodies written as `|-` blocks. Number-looking strings stay quoted; hand-written `value: 123` is read back as a string.
+- **Ids live in the files**, so renaming a file doesn't break a tab's "Update template". A hand-written file without an `id` gets one written back. Duplicate ids, or ids used by another space, are reported per file.
+- **Nothing is lost on bad files:** a file that doesn't parse (e.g. a merge conflict) is listed in the space's sync status, and its template keeps the last good version. Only a file that is gone deletes its template. A missing folder only shows a warning.
+- **Secrets:** environment variables marked secret are written without a value. On reload, the local value is kept.
+- **Commands:** link (writes everything out; refuses a folder that already has `kangpos.yaml` or is linked to another space), open workspace folder (a clone with `kangpos.yaml` becomes a new space), unlink (keeps everything in SQLite, leaves the files), reload.
 
 ## MVP scope
 

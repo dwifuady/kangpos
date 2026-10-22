@@ -1,6 +1,7 @@
 pub mod commands;
 pub mod http;
 pub mod storage;
+pub mod sync;
 
 use commands::AppState;
 use std::sync::Arc;
@@ -23,13 +24,16 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     println!("[Startup] Database path: {:?}", db_path);
     let db = DatabaseManager::new(db_path)?;
 
+    let db = Arc::new(db);
+    let sync_manager = Arc::new(sync::SyncManager::new(Arc::clone(&db)));
     let app_state = AppState {
-        db: Arc::new(db),
+        db,
         http: Arc::new(http::HttpState::default()),
+        sync: Arc::clone(&sync_manager),
     };
 
     tauri::Builder::default()
-        .setup(|app| {
+        .setup(move |app| {
             let mica = app
                 .get_webview_window("main")
                 .map(|w| {
@@ -38,6 +42,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 })
                 .unwrap_or(false);
             app.manage(MicaEnabled(mica));
+
+            // Load and watch every space that is linked to a folder.
+            sync_manager.set_app(app.handle().clone());
+            let manager = Arc::clone(&sync_manager);
+            std::thread::spawn(move || manager.start_all());
             Ok(())
         })
         .manage(app_state)
@@ -67,6 +76,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             commands::cancel_request,
             commands::read_import_file,
             commands::save_response_file,
+            commands::link_space_folder,
+            commands::unlink_space_folder,
+            commands::open_workspace_folder,
+            commands::get_sync_status,
+            commands::reload_space_folder,
         ])
         .run(tauri::generate_context!())?;
     Ok(())

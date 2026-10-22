@@ -1,10 +1,11 @@
 // Space switcher row under the environment selector, plus the create/edit dialog.
 import { useEffect, useRef, useState } from 'react';
-import { Check, ChevronRight, Pencil, Plus, Trash2 } from 'lucide-react';
+import { AlertTriangle, Check, ChevronRight, FolderGit2, FolderOpen, Pencil, Plus, Trash2 } from 'lucide-react';
 import { confirm } from '@tauri-apps/plugin-dialog';
 import { useAppStore } from '../store';
 import { SPACE_COLORS } from '../utils/spaceColors';
 import { GhostButton, inputClass, labelClass, Modal, PrimaryButton } from './Modal';
+import { FolderSyncSection, pickFolder, syncProblem } from './FolderSync';
 
 export function SpaceSwitcher() {
   const spaces = useAppStore(s => s.spaces);
@@ -12,6 +13,8 @@ export function SpaceSwitcher() {
   const setActiveSpace = useAppStore(s => s.setActiveSpace);
   const deleteSpace = useAppStore(s => s.deleteSpace);
   const setSpaceDialog = useAppStore(s => s.setSpaceDialog);
+  const openWorkspaceFolder = useAppStore(s => s.openWorkspaceFolder);
+  const syncStatus = useAppStore(s => s.syncStatus);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -27,6 +30,7 @@ export function SpaceSwitcher() {
   const active = spaces.find(s => s.id === activeSpaceId);
   if (!active) return null;
   const color = active.color ?? SPACE_COLORS[0];
+  const problem = active.sync_dir ? syncProblem(syncStatus[active.id]) : null;
 
   const handleDelete = async (id: string, name: string) => {
     setOpen(false);
@@ -48,6 +52,16 @@ export function SpaceSwitcher() {
         <ChevronRight className={`w-3.5 h-3.5 opacity-40 group-hover:opacity-100 transition-transform ${open ? 'rotate-90' : ''}`} />
         <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: color }} />
         <span className="text-[13px] font-semibold text-[var(--text-primary)] truncate">{active.name}</span>
+        {active.sync_dir && !problem && (
+          <span title={`Synced with ${active.sync_dir}`} className="shrink-0 flex">
+            <FolderGit2 className="w-3 h-3 text-[var(--text-muted)]" aria-label="Synced with a folder" />
+          </span>
+        )}
+        {problem && (
+          <span title={problem} className="shrink-0 flex">
+            <AlertTriangle className="w-3 h-3 text-amber-400" aria-label={problem} />
+          </span>
+        )}
       </button>
 
       {open && (
@@ -68,6 +82,7 @@ export function SpaceSwitcher() {
               >
                 <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: space.color ?? SPACE_COLORS[i % SPACE_COLORS.length] }} />
                 <span className="truncate flex-1">{space.name}</span>
+                {space.sync_dir && <FolderGit2 className="w-3 h-3 shrink-0 text-[var(--text-muted)] group-hover/row:opacity-0" aria-label="Synced with a folder" />}
                 {space.id === activeSpaceId && <Check className="w-3.5 h-3.5 text-[var(--text-muted)] group-hover/row:opacity-0" />}
               </button>
               <div className="absolute right-1 top-1/2 -translate-y-1/2 flex gap-0.5 opacity-0 group-hover/row:opacity-100">
@@ -100,6 +115,17 @@ export function SpaceSwitcher() {
             className="w-full px-2.5 py-1.5 text-left text-xs flex items-center gap-2 text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]"
           >
             <Plus className="w-3 h-3 opacity-60" /> New Space
+          </button>
+          <button
+            onClick={async () => {
+              setOpen(false);
+              const dir = await pickFolder('Open a KangPos workspace folder');
+              if (dir) await openWorkspaceFolder(dir);
+            }}
+            className="w-full px-2.5 py-1.5 text-left text-xs flex items-center gap-2 text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]"
+            title="Add a folder that already holds a KangPos workspace, e.g. a cloned git repository"
+          >
+            <FolderOpen className="w-3 h-3 opacity-60" /> Open workspace folder…
           </button>
         </div>
       )}
@@ -168,6 +194,7 @@ export function SpaceDialog() {
           />
         ))}
       </div>
+      {editing && <FolderSyncSection space={editing} />}
     </Modal>
   );
 }

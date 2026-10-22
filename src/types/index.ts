@@ -62,6 +62,8 @@ export interface Space {
   name: string;
   color: string | null;
   active_environment_id: string | null;
+  /** Folder the space's templates and environments are synced to, if linked. */
+  sync_dir: string | null;
   sort_order: number;
   created_at: string;
   updated_at: string;
@@ -185,4 +187,26 @@ export function normalizeRequest(input: Partial<RequestSpec> | null | undefined)
     auth: input.auth?.type ? input.auth : { type: 'none' },
     params: Array.isArray(input.params) ? input.params : [],
   };
+}
+
+export interface SyncFileError {
+  /** Relative to the space folder, with forward slashes. */
+  path: string;
+  message: string;
+}
+
+export interface SyncStatus {
+  space_id: string;
+  dir: string;
+  /** The linked folder no longer exists. */
+  missing: boolean;
+  errors: SyncFileError[];
+}
+
+/** Emitted by Rust when a linked folder changed on disk. */
+export interface SyncEvent {
+  space_id: string;
+  /** Templates, environments or the space itself were updated from the folder. */
+  changed: boolean;
+  status: SyncStatus;
 }

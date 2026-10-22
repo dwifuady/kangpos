@@ -42,6 +42,8 @@ pub struct Space {
     pub name: String,
     pub color: Option<String>,
     pub active_environment_id: Option<String>,
+    /// Folder this space's templates and environments are synced to, if linked.
+    pub sync_dir: Option<String>,
     pub sort_order: i64,
     pub created_at: String,
     pub updated_at: String,
@@ -191,6 +193,16 @@ fn trim_response(mut stored: Value) -> Value {
     stored
 }
 
+fn add_column_if_missing(conn: &Connection, table: &str, column: &str, sql_type: &str) -> StorageResult<()> {
+    let exists = conn
+        .prepare(&format!("SELECT 1 FROM pragma_table_info('{table}') WHERE name = ?1"))?
+        .exists([column])?;
+    if !exists {
+        conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {sql_type}"))?;
+    }
+    Ok(())
+}
+
 impl DatabaseManager {
     pub fn new(db_path: PathBuf) -> StorageResult<Self> {
         if let Some(parent) = db_path.parent() {
@@ -286,7 +298,16 @@ impl DatabaseManager {
             CREATE INDEX IF NOT EXISTS idx_tabs_space ON tabs(space_id);
         "#,
         )?;
+        // Columns added after the first release.
+        add_column_if_missing(&conn, "spaces", "sync_dir", "TEXT")?;
+        add_column_if_missing(&conn, "templates", "file_path", "TEXT")?;
+        add_column_if_missing(&conn, "environments", "file_path", "TEXT")?;
         Ok(())
+    }
+
+    /// Direct connection access for the folder sync module.
+    pub(crate) fn conn(&self) -> parking_lot::MutexGuard<'_, Connection> {
+        self.connection.lock()
     }
 
     // ---- Spaces ----
@@ -297,6 +318,7 @@ impl DatabaseManager {
             name: row.get("name")?,
             color: row.get("color")?,
             active_environment_id: row.get("active_environment_id")?,
+            sync_dir: row.get("sync_dir")?,
             sort_order: row.get("sort_order")?,
             created_at: row.get("created_at")?,
             updated_at: row.get("updated_at")?,
@@ -390,7 +412,7 @@ impl DatabaseManager {
         Ok(rows.collect::<Result<_, _>>()?)
     }
 
-    fn get_environment(&self, id: &str) -> StorageResult<Environment> {
+    pub(crate) fn get_environment(&self, id: &str) -> StorageResult<Environment> {
         let conn = self.connection.lock();
         conn.query_row(
             "SELECT * FROM environments WHERE id = ?1",
@@ -484,7 +506,7 @@ impl DatabaseManager {
         Ok(rows.collect::<Result<_, _>>()?)
     }
 
-    fn get_template(&self, id: &str) -> StorageResult<Template> {
+    pub(crate) fn get_template(&self, id: &str) -> StorageResult<Template> {
         let conn = self.connection.lock();
         conn.query_row(
             "SELECT * FROM templates WHERE id = ?1",

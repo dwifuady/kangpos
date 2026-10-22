@@ -22,7 +22,7 @@ export function installBrowserMock(): void {
 
   // Seed one space so the preview isn't empty.
   const spaceId = id();
-  spaces.push({ id: spaceId, name: 'Preview', color: '#93C5FD', active_environment_id: null, sort_order: 0, created_at: now(), updated_at: now() });
+  spaces.push({ id: spaceId, name: 'Preview', color: '#93C5FD', active_environment_id: null, sync_dir: null, sort_order: 0, created_at: now(), updated_at: now() });
 
   const patch = (row: Row | undefined, input: Record<string, unknown>) => {
     if (!row) throw { code: 'NotFound', message: 'not found' };
@@ -41,7 +41,7 @@ export function installBrowserMock(): void {
       case 'list_spaces':
         return spaces.map(s => ({ ...s }));
       case 'create_space': {
-        const row = { id: id(), name: args.name, color: args.color, active_environment_id: null, sort_order: spaces.length, created_at: now(), updated_at: now() };
+        const row = { id: id(), name: args.name, color: args.color, active_environment_id: null, sync_dir: null, sort_order: spaces.length, created_at: now(), updated_at: now() };
         spaces.push(row);
         return { ...row };
       }
@@ -144,6 +144,14 @@ export function installBrowserMock(): void {
       }
       case 'plugin:dialog|save':
         return args.options?.defaultPath ?? 'response';
+      case 'get_sync_status':
+        return null;
+      case 'link_space_folder':
+      case 'open_workspace_folder':
+      case 'reload_space_folder':
+        throw { code: 'Validation', message: 'Folder sync needs the desktop app (no file system in the browser preview)' };
+      case 'unlink_space_folder':
+        return patch(spaces.find(s => s.id === args.spaceId), { sync_dir: null });
       case 'read_import_file':
         throw { code: 'Validation', message: 'File access is not available in the browser preview; paste the content instead' };
       default:

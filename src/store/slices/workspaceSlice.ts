@@ -3,7 +3,7 @@
 import type { StateCreator } from 'zustand';
 import type { AppState } from '..';
 import * as api from '../../api';
-import type { Environment, EnvVariable, RequestSpec, Space, Template } from '../../types';
+import type { Environment, EnvVariable, RequestSpec, Space, SyncEvent, SyncStatus, Template } from '../../types';
 import type { ImportResult } from '../../utils/importers';
 import { DEFAULT_SEND_OPTIONS } from './uiSlice';
 
@@ -13,8 +13,15 @@ export interface WorkspaceSlice {
   spacesLoading: boolean;
   environments: Environment[];
   templates: Template[];
+  /** Folder sync state per linked space. */
+  syncStatus: Record<string, SyncStatus>;
 
   loadInitial: () => Promise<void>;
+  linkFolder: (spaceId: string, path: string) => Promise<boolean>;
+  unlinkFolder: (spaceId: string) => Promise<void>;
+  openWorkspaceFolder: (path: string) => Promise<void>;
+  reloadFolder: (spaceId: string) => Promise<void>;
+  handleSyncEvent: (event: SyncEvent) => Promise<void>;
   setActiveSpace: (id: string) => Promise<void>;
   createSpace: (name: string, color: string) => Promise<Space | null>;
   updateSpace: (id: string, input: { name?: string; color?: string }) => Promise<void>;
@@ -44,9 +51,33 @@ function errorMessage(e: unknown): string {
 
 export const createWorkspaceSlice: StateCreator<AppState, [], [], WorkspaceSlice> = (set, get) => {
   const fail = (what: string) => (e: unknown) => {
+    // A Sync error means the database change went through but the folder write
+    // didn't: say so plainly and reload, so the UI shows what was saved.
+    if ((e as { code?: string })?.code === 'Sync') {
+      get().addToast({ type: 'error', message: errorMessage(e), duration: 7000 });
+      const spaceId = get().activeSpaceId;
+      if (spaceId) void reloadDefinitions(spaceId);
+      return null;
+    }
     get().addToast({ type: 'error', message: `${what}: ${errorMessage(e)}` });
     return null;
   };
+
+  /** Re-read templates and environments (not tabs) of the active space. */
+  const reloadDefinitions = async (spaceId: string) => {
+    const [environments, templates] = await Promise.all([api.listEnvironments(spaceId), api.listTemplates(spaceId)]);
+    if (get().activeSpaceId === spaceId) set({ environments, templates });
+  };
+
+  const setStatus = (status: SyncStatus | null, spaceId: string) =>
+    set(s => {
+      const next = { ...s.syncStatus };
+      if (status) next[spaceId] = status;
+      else delete next[spaceId];
+      return { syncStatus: next };
+    });
+
+  const replaceSpace = (space: Space) => set(s => ({ spaces: s.spaces.map(x => (x.id === space.id ? space : x)) }));
 
   /** Load everything that belongs to one space and restore its last tab. */
   const loadSpaceContents = async (spaceId: string, preferredTabId?: string | null) => {
@@ -67,6 +98,53 @@ export const createWorkspaceSlice: StateCreator<AppState, [], [], WorkspaceSlice
     spacesLoading: true,
     environments: [],
     templates: [],
+    syncStatus: {},
+
+    linkFolder: async (spaceId, path) => {
+      const space = await api.linkSpaceFolder(spaceId, path).catch(fail('Could not link folder'));
+      if (!space) return false;
+      replaceSpace(space);
+      setStatus(await api.getSyncStatus(spaceId).catch(() => null), spaceId);
+      get().addToast({ type: 'success', message: `Templates and environments are now saved in ${space.sync_dir}` });
+      return true;
+    },
+
+    unlinkFolder: async (spaceId) => {
+      const space = await api.unlinkSpaceFolder(spaceId).catch(fail('Could not unlink folder'));
+      if (!space) return;
+      replaceSpace(space);
+      setStatus(null, spaceId);
+      get().addToast({ type: 'info', message: 'Folder unlinked. Everything stays in this space; the folder was left as it is.' });
+    },
+
+    openWorkspaceFolder: async (path) => {
+      const space = await api.openWorkspaceFolder(path).catch(fail('Could not open folder'));
+      if (!space) return;
+      set(s => ({ spaces: [...s.spaces, space] }));
+      setStatus(await api.getSyncStatus(space.id).catch(() => null), space.id);
+      await get().setActiveSpace(space.id);
+      get().addToast({ type: 'success', message: `Opened "${space.name}" from ${space.sync_dir}` });
+    },
+
+    reloadFolder: async (spaceId) => {
+      const status = await api.reloadSpaceFolder(spaceId).catch(fail('Could not read folder'));
+      if (!status) return;
+      setStatus(status, spaceId);
+      replaceSpace(await api.listSpaces().then(list => list.find(s => s.id === spaceId)!));
+      if (get().activeSpaceId === spaceId) await reloadDefinitions(spaceId);
+    },
+
+    handleSyncEvent: async ({ space_id, changed, status }) => {
+      setStatus(status, space_id);
+      if (!changed) return;
+      // Name or colour may have changed through kangpos.yaml.
+      const spaces = await api.listSpaces().catch(() => null);
+      if (spaces) set({ spaces });
+      if (get().activeSpaceId === space_id) {
+        await reloadDefinitions(space_id);
+        get().addToast({ type: 'info', message: 'Templates updated from the workspace folder. Open tabs are unchanged.', duration: 2500 });
+      }
+    },
 
     loadInitial: async () => {
       set({ spacesLoading: true });
@@ -79,6 +157,11 @@ export const createWorkspaceSlice: StateCreator<AppState, [], [], WorkspaceSlice
         const space = spaces.find(s => s.id === lastSpaceId) ?? spaces[0] ?? null;
         set({ spaces, sidebarWidth, sendOptions, lastTabBySpace: lastTabs, activeSpaceId: space?.id ?? null });
         if (space) await loadSpaceContents(space.id, lastTabs[space.id]);
+        // Folder status (missing folder, unreadable files) for linked spaces.
+        const statuses = await Promise.all(
+          spaces.filter(s => s.sync_dir).map(s => api.getSyncStatus(s.id).catch(() => null)),
+        );
+        set({ syncStatus: Object.fromEntries(statuses.filter((st): st is SyncStatus => !!st).map(st => [st.space_id, st])) });
       } catch (e) {
         fail('Failed to load data')(e);
       } finally {

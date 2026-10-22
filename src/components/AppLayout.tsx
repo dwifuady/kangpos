@@ -1,6 +1,7 @@
 // Arc-style layout (same shape as Larik): sidebar with environment selector,
 // space switcher, Tabs/Templates toggle and footer; request editor on the right.
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { listen } from '@tauri-apps/api/event';
 import { BookMarked, LayoutList, Plus, Settings, Upload } from 'lucide-react';
 import { useAppStore } from '../store';
 import { useShortcuts } from '../hooks/useShortcuts';
@@ -18,6 +19,8 @@ import { ImportDialog } from './ImportDialog';
 import { SettingsDialog } from './SettingsDialog';
 import { ToastContainer } from './Toast';
 import { ErrorBoundary } from './ErrorBoundary';
+import { FolderSyncBanner } from './FolderSync';
+import type { SyncEvent } from '../types';
 
 export function AppLayout() {
   const loadInitial = useAppStore(s => s.loadInitial);
@@ -54,6 +57,22 @@ export function AppLayout() {
     initTheme();
     void loadInitial();
   }, [initTheme, loadInitial]);
+
+  // Linked folders changed on disk (git pull, another editor): reload what changed.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    listen<SyncEvent>('kangpos://sync', e => void useAppStore.getState().handleSyncEvent(e.payload))
+      .then(fn => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
 
   // Write pending edits before the window goes away.
   useEffect(() => {
@@ -154,6 +173,7 @@ export function AppLayout() {
             className={`flex-1 flex flex-col min-h-0 ${direction === 'right' ? 'animate-space-slide-in-right' : direction === 'left' ? 'animate-space-slide-in-left' : ''}`}
             onAnimationEnd={() => setDirection(null)}
           >
+            {activeSpace && <FolderSyncBanner />}
             {activeSpace && (
               <div className="pl-1.5 py-1">
                 <div className="bg-[var(--bg-hover)] p-0.5 rounded-md flex gap-0.5">

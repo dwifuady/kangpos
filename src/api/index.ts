@@ -12,6 +12,7 @@ import {
   type SendRequestInput,
   type Space,
   type StoredResponse,
+  type SyncStatus,
   type Tab,
   type Template,
 } from '../types';
@@ -119,3 +120,16 @@ export const readImportFile = (path: string) => invokeSafe<string>('read_import_
 
 export const saveResponseFile = (path: string, base64: string) =>
   invokeSafe<void>('save_response_file', { path, base64 });
+
+// ---- Folder sync ----
+
+export const linkSpaceFolder = (spaceId: string, path: string) =>
+  invokeSafe<Space>('link_space_folder', { spaceId, path });
+
+export const unlinkSpaceFolder = (spaceId: string) => invokeSafe<Space>('unlink_space_folder', { spaceId });
+
+export const openWorkspaceFolder = (path: string) => invokeSafe<Space>('open_workspace_folder', { path });
+
+export const getSyncStatus = (spaceId: string) => invokeSafe<SyncStatus | null>('get_sync_status', { spaceId });
+
+export const reloadSpaceFolder = (spaceId: string) => invokeSafe<SyncStatus>('reload_space_folder', { spaceId });
