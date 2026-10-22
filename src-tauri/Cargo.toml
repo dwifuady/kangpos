@@ -26,7 +26,9 @@ uuid = { version = "1", features = ["v4"] }
 tokio = { version = "1", features = ["full"] }
 parking_lot = "0.12"
 base64 = "0.22"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip", "brotli", "deflate", "multipart", "http2", "charset"] }
+# native-roots: also trust the Windows certificate store, so corporate VPN / TLS-inspection
+# roots work like they do in browsers. webpki roots (rustls-tls) stay as a fallback.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "rustls-tls-native-roots", "gzip", "brotli", "deflate", "multipart", "http2", "charset"] }
 
 [lints.clippy]
 unwrap_used = "deny"

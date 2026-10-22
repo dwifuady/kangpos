@@ -354,4 +354,43 @@ mod tests {
         .unwrap_err();
         assert!(err.starts_with("Invalid URL"));
     }
+
+    /// Live check (needs network): HTTPS works with our client. Behind a
+    /// TLS-inspecting VPN this only passes because the Windows store is trusted.
+    /// Run with `cargo test -- --ignored live_https`.
+    #[tokio::test]
+    #[ignore]
+    async fn live_https_with_os_roots() {
+        let state = HttpState::default();
+        let response = send(
+            &state,
+            SendRequestInput {
+                request_id: "live".into(),
+                method: "GET".into(),
+                url: "https://jsonplaceholder.typicode.com/posts/1".into(),
+                headers: vec![],
+                body: RequestBody::None,
+                options: SendOptions::default(),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status, 200);
+    }
+
+    /// Diagnostic: the same request with only the bundled (webpki) roots.
+    /// Fails with UnknownIssuer when a VPN intercepts TLS, which is the case
+    /// the Windows store fixes. Prints the outcome instead of asserting.
+    #[tokio::test]
+    #[ignore]
+    async fn live_https_bundled_roots_only() {
+        let client = reqwest::Client::builder()
+            .tls_built_in_native_certs(false)
+            .build()
+            .unwrap();
+        match client.get("https://jsonplaceholder.typicode.com/posts/1").send().await {
+            Ok(r) => println!("bundled roots only: OK ({}), traffic is not intercepted", r.status()),
+            Err(e) => println!("bundled roots only: FAILED: {}", describe_error(e)),
+        }
+    }
 }
