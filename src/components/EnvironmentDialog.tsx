@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { confirm } from '@tauri-apps/plugin-dialog';
 import { Check, Copy, Eye, EyeOff, Lock, Plus, Trash2 } from 'lucide-react';
 import { activeEnvironment, useAppStore } from '../store';
-import type { EnvVariable } from '../types';
+import type { Environment, EnvVariable } from '../types';
 import { GhostButton, Modal, PrimaryButton } from './Modal';
 
 export function EnvironmentDialog() {
@@ -20,22 +20,47 @@ export function EnvironmentDialog() {
   const [name, setName] = useState('');
   const [vars, setVars] = useState<EnvVariable[]>([]);
   const [revealed, setRevealed] = useState<Set<number>>(new Set());
+  /** The environment changed elsewhere (script, workspace folder) while there were unsaved edits here. */
+  const [stale, setStale] = useState(false);
   const dirty = useRef(false);
+  /** What the draft was loaded from, to notice changes made outside the dialog. */
+  const loadedFrom = useRef('');
 
   const selected = environments.find(e => e.id === selectedId) ?? null;
+  const snapshot = (env: Environment) => JSON.stringify([env.name, env.variables]);
 
+  const loadDraft = (env: Environment | null) => {
+    setName(env?.name ?? '');
+    setVars(env ? env.variables.map(v => ({ ...v })) : []);
+    setRevealed(new Set());
+    setStale(false);
+    dirty.current = false;
+    loadedFrom.current = env ? snapshot(env) : '';
+  };
+
+  // Always start from the current values when the dialog opens (even if the
+  // same environment is selected as last time).
   useEffect(() => {
-    if (open) setSelectedId(active?.id ?? environments[0]?.id ?? null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- pick a selection when the dialog opens
+    if (!open) return;
+    const id = active?.id ?? environments[0]?.id ?? null;
+    setSelectedId(id);
+    loadDraft(environments.find(e => e.id === id) ?? null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only when the dialog opens
   }, [open]);
 
   useEffect(() => {
-    setName(selected?.name ?? '');
-    setVars(selected ? selected.variables.map(v => ({ ...v })) : []);
-    setRevealed(new Set());
-    dirty.current = false;
+    loadDraft(selected);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- load the draft when the selection changes
   }, [selectedId]);
+
+  // Pick up changes made while the dialog is open (pm.environment.set, git pull).
+  // Unsaved edits are never overwritten silently: show a notice instead.
+  useEffect(() => {
+    if (!open || !selected || snapshot(selected) === loadedFrom.current) return;
+    if (dirty.current) setStale(true);
+    else loadDraft(selected);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- react to the stored environment changing
+  }, [open, selected]);
 
   if (!open) return null;
 
@@ -153,6 +178,17 @@ export function EnvironmentDialog() {
               </button>
             </div>
 
+            {stale && (
+              <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-md bg-amber-500/10 border border-amber-500/30 text-[12px] text-amber-400">
+                <span className="flex-1">
+                  This environment was changed outside this dialog (by a script or the workspace folder) while you were editing. Closing
+                  will save your version over it.
+                </span>
+                <button onClick={() => selected && loadDraft(selected)} className="px-2 py-0.5 rounded bg-amber-500/15 hover:bg-amber-500/25 font-medium shrink-0">
+                  Reload latest
+                </button>
+              </div>
+            )}
             <div className="grid gap-x-1 px-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)]" style={{ gridTemplateColumns: COLS }}>
               <span />
               <span className="pl-2">Variable</span>
