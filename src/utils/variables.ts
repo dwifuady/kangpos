@@ -139,3 +139,17 @@ export function previewValue(name: string, ctx: ResolveContext): string {
   if (isDynamicVariable(name)) return 'generated on send';
   return resolveText(`{{${name}}}`, ctx);
 }
+
+/** Parse a dropdown's options as typed by the user: comma- or line-separated, trimmed, no duplicates. */
+export function parseOptions(raw: string): string[] {
+  const seen = new Set<string>();
+  for (const part of raw.split(/[,\n]/)) {
+    const option = part.trim();
+    if (option) seen.add(option);
+  }
+  return [...seen];
+}
+
+export function isSelect(param: TemplateParam): boolean {
+  return param.type === 'select';
+}

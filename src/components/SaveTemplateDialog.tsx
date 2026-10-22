@@ -56,7 +56,8 @@ export function SaveTemplateDialog() {
     if (!name.trim()) return;
     const params: TemplateParam[] = rows
       .filter(r => r.include)
-      .map(({ name: n, default: d, required, description }) => ({ name: n, default: d, required, description }));
+      // Keep everything about the input except the dialog's own fields.
+      .map(({ include: _include, source: _source, ...param }) => param);
     await saveTabAsTemplate(tab.id, name.trim(), folder.trim(), { ...structuredClone(tab.request), params });
     close();
   };

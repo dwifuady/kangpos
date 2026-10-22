@@ -71,7 +71,7 @@ struct SyncEvent {
 /// Keys in the order they are written; anything else follows alphabetically.
 const KEY_ORDER: &[&str] = &[
     "kangpos", "id", "name", "color", "method", "url", "params", "query", "headers", "body", "auth",
-    "variables", "type", "key", "value", "enabled", "secret", "kind", "default", "required",
+    "variables", "type", "key", "value", "enabled", "secret", "kind", "default", "required", "options",
     "description", "raw", "fields", "token", "username", "password", "in",
 ];
 
@@ -1164,5 +1164,30 @@ mod watcher_tests {
 
         manager.stop(&space.id);
         std::fs::remove_dir_all(&canon).unwrap();
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod dropdown_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn dropdown_inputs_round_trip_in_order() {
+        let doc = template_document(
+            "abc",
+            "List orders",
+            &json!({"method": "GET", "url": "x", "params": [
+                {"options": ["open", "closed"], "required": true, "default": "open", "type": "select", "name": "status"}
+            ]}),
+        );
+        let text = render(&doc).unwrap();
+        assert!(
+            text.contains("- name: status\n  type: select\n  default: open\n  required: true\n  options:\n  - open\n  - closed\n"),
+            "{text}"
+        );
+        let back = parse_yaml(&text).unwrap();
+        assert_eq!(back["params"][0]["options"], json!(["open", "closed"]));
     }
 }

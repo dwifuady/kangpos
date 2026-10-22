@@ -253,3 +253,55 @@ describe('detection', () => {
     expect(() => importDocument('{nope')).toThrow(/Not valid JSON or YAML/);
   });
 });
+
+describe('OpenAPI enums become dropdown inputs', () => {
+  it('maps enum parameters and required enum body fields to select inputs', () => {
+    const result = importDocument(
+      JSON.stringify({
+        openapi: '3.0.0',
+        info: { title: 'Orders' },
+        servers: [{ url: 'https://orders.test' }],
+        paths: {
+          '/orders/{region}': {
+            post: {
+              parameters: [
+                { name: 'region', in: 'path', required: true, schema: { type: 'string', enum: ['au', 'nz'] } },
+                { name: 'status', in: 'query', required: true, schema: { type: 'string', enum: ['open', 'closed'], default: 'open' } },
+              ],
+              requestBody: {
+                content: {
+                  'application/json': {
+                    schema: {
+                      type: 'object',
+                      required: ['channel'],
+                      properties: { channel: { type: 'string', enum: ['web', 'phone'] } },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      }),
+    );
+    const params = result.templates[0].request.params;
+    expect(params).toEqual([
+      { name: 'region', default: '', required: true, description: undefined, type: 'select', options: ['au', 'nz'] },
+      { name: 'status', default: 'open', required: true, description: undefined, type: 'select', options: ['open', 'closed'] },
+      { name: 'channel', default: '', required: true, description: undefined, type: 'select', options: ['web', 'phone'] },
+    ]);
+    expect(JSON.parse(result.templates[0].request.body.raw)).toEqual({ channel: '{{channel}}' });
+  });
+
+  it('reads Swagger 2 enums on the parameter itself', () => {
+    const result = importDocument(
+      JSON.stringify({
+        swagger: '2.0',
+        info: { title: 'Old' },
+        host: 'old.test',
+        paths: { '/items': { get: { parameters: [{ name: 'sort', in: 'query', required: true, type: 'string', enum: ['asc', 'desc'] }] } } },
+      }),
+    );
+    expect(result.templates[0].request.params[0]).toMatchObject({ name: 'sort', type: 'select', options: ['asc', 'desc'] });
+  });
+});

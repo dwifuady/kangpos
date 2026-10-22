@@ -7,6 +7,7 @@ import {
   type EnvVariable,
   type HttpMethod,
   type RequestSpec,
+  type TemplateParam,
 } from '../../types';
 import { addParam, WarningList, type ImportedTemplate, type ImportResult } from './types';
 
@@ -97,6 +98,21 @@ export function sampleFromSchema(doc: any, schema: any, warnings: WarningList, d
   return null;
 }
 
+/** An `enum` becomes a dropdown input. Works for OpenAPI 3 (`schema.enum`) and Swagger 2 (`enum` on the parameter). */
+function enumInput(doc: any, schemaOrParam: any, warnings: WarningList): Pick<TemplateParam, 'type' | 'options'> {
+  const s = deref(doc, schemaOrParam?.schema ?? schemaOrParam, warnings);
+  const values: unknown[] = Array.isArray(s?.enum) ? s.enum : Array.isArray(schemaOrParam?.enum) ? schemaOrParam.enum : [];
+  const options = [...new Set(values.filter(v => v !== null && v !== undefined).map(v => String(v)))];
+  return options.length > 0 ? { type: 'select', options } : {};
+}
+
+/** Default for an input: a required dropdown starts unselected unless the spec names a default or example. */
+function inputDefault(doc: any, param: any, example: string, warnings: WarningList): string {
+  if (!enumInput(doc, param, warnings).type) return example;
+  const declared = [param.example, param.schema?.example, param.schema?.default, param.default, param['x-example']];
+  return declared.some(v => v !== undefined) || (param.examples && typeof param.examples === 'object') ? example : '';
+}
+
 function exampleString(doc: any, param: any, warnings: WarningList): string {
   const value =
     param.example ??
@@ -180,7 +196,7 @@ function jsonBody(doc: any, schema: any, request: RequestSpec, warnings: Warning
     for (const field of required) {
       const prop = deref(doc, s.properties?.[field], warnings);
       const type = Array.isArray(prop?.type) ? prop.type[0] : prop?.type;
-      if (type !== 'string' || prop?.enum) continue;
+      if (type !== 'string') continue;
       const current = (sample as Record<string, unknown>)[field];
       const hasExample = prop?.example !== undefined || prop?.default !== undefined;
       addParam(request.params, {
@@ -188,6 +204,7 @@ function jsonBody(doc: any, schema: any, request: RequestSpec, warnings: Warning
         default: hasExample ? String(current ?? '') : '',
         required: true,
         description: prop?.description,
+        ...enumInput(doc, prop, warnings),
       });
       (sample as Record<string, unknown>)[field] = `{{${field}}}`;
     }
@@ -289,13 +306,13 @@ function convertOperation(
     const name = String(p.name);
     const example = exampleString(doc, p, warnings);
     if (p.in === 'path') {
-      addParam(request.params, { name, default: example, required: true, description: p.description });
+      addParam(request.params, { name, default: inputDefault(doc, p, example, warnings), required: true, description: p.description, ...enumInput(doc, p, warnings) });
     } else if (p.in === 'query' || p.in === 'header') {
       if (p.in === 'header' && SKIPPED_HEADERS.has(name.toLowerCase())) continue;
       const rows = p.in === 'query' ? request.query : request.headers;
       if (p.required) {
         rows.push({ key: name, value: `{{${name}}}`, enabled: true, description: p.description });
-        addParam(request.params, { name, default: example, required: true, description: p.description });
+        addParam(request.params, { name, default: inputDefault(doc, p, example, warnings), required: true, description: p.description, ...enumInput(doc, p, warnings) });
       } else {
         rows.push({ key: name, value: example, enabled: false, description: p.description });
       }

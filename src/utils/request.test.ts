@@ -276,3 +276,12 @@ describe('checkJsonWithPlaceholders', () => {
     expect(text.slice(problem!.offset)).toBe('"b": 1}');
   });
 });
+
+import { parseOptions } from './variables';
+
+describe('dropdown options', () => {
+  it('parses comma or line separated options without blanks or duplicates', () => {
+    expect(parseOptions('active, inactive,,pending\nactive\n  closed ')).toEqual(['active', 'inactive', 'pending', 'closed']);
+    expect(parseOptions('  ')).toEqual([]);
+  });
+});

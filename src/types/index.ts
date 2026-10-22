@@ -31,11 +31,18 @@ export type AuthSpec =
   | { type: 'apikey'; key: string; value: string; in: 'header' | 'query' };
 
 /** A value the user fills in per tab; referenced as {{name}}. */
+/** How an input is filled in: free text, or picked from a list. */
+export type InputType = 'text' | 'select';
+
 export interface TemplateParam {
   name: string;
   default: string;
   required: boolean;
   description?: string;
+  /** Defaults to 'text'. */
+  type?: InputType;
+  /** Choices for `type: 'select'`. */
+  options?: string[];
 }
 
 export interface RequestSpec {

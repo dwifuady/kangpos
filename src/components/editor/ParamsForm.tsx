@@ -35,13 +35,30 @@ export function ParamsForm({ params, values, onChange, spaceColor, highlightMiss
               )}
               {p.description && <span className="truncate text-[var(--text-muted)] font-normal">· {p.description}</span>}
             </span>
-            <input
-              value={value}
-              onChange={e => onChange(p.name, e.target.value)}
-              placeholder={p.default ? `default: ${p.default}` : p.required ? 'required' : 'optional'}
-              className={`w-full px-2 py-1 text-[13px] font-mono rounded ${missing ? 'ring-1 ring-red-400/70' : ''}`}
-              spellCheck={false}
-            />
+            {p.type === 'select' ? (
+              <select
+                value={value}
+                onChange={e => onChange(p.name, e.target.value)}
+                className={`w-full px-1.5 py-1 text-[13px] font-mono rounded ${missing ? 'ring-1 ring-red-400/70' : ''} ${value === '' ? 'text-[var(--text-muted)]' : ''}`}
+              >
+                {/* Empty = use the default, like an empty text input. */}
+                <option value="">{p.default ? `default: ${p.default}` : p.required ? 'Select…' : '(none)'}</option>
+                {(p.options ?? []).map(o => (
+                  <option key={o} value={o} className="text-[var(--text-primary)]">
+                    {o}
+                  </option>
+                ))}
+                {value && !(p.options ?? []).includes(value) && <option value={value}>{value} (not in list)</option>}
+              </select>
+            ) : (
+              <input
+                value={value}
+                onChange={e => onChange(p.name, e.target.value)}
+                placeholder={p.default ? `default: ${p.default}` : p.required ? 'required' : 'optional'}
+                className={`w-full px-2 py-1 text-[13px] font-mono rounded ${missing ? 'ring-1 ring-red-400/70' : ''}`}
+                spellCheck={false}
+              />
+            )}
           </label>
         );
       })}

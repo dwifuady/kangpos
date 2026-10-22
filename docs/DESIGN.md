@@ -26,6 +26,7 @@ It keeps Larik's model of **workspaces → tabs**, but a new tab starts from a *
    - The editor colours them differently: params in the space colour, env vars in blue, unresolved names in red.
 4. **Inputs form.** Declared params show as a form at the top of the tab. Send is blocked while a required one is empty.
    - The UI calls them **Inputs**, not "Params", because Postman's "Params" means query parameters. An input is only sent where a `{{name}}` refers to it.
+   - An input is free text or a **dropdown** (`type: 'select'` with `options`). An empty dropdown means "use the default"; a required dropdown with no default must be picked before Send.
    - Inputs that nothing refers to are tagged *unused*, and a warning offers **Add as query params** (adds `name={{name}}` rows). Send also shows a toast for unused inputs that have values.
 5. **Autocomplete.** Typing `{{` in any field (URL, query, headers, auth, body) suggests inputs, then environment variables, then dynamic values, each with its current value. Secret values are masked.
    - Values are inserted as plain text, so a JSON string needs quotes: `"nama": "{{nama}}"`. Numbers and booleans can go bare: `"jumlah": {{jumlah}}`.
@@ -40,7 +41,7 @@ It keeps Larik's model of **workspaces → tabs**, but a new tab starts from a *
 |---|---|
 | Postman collection v2.0/v2.1 (JSON) | One template per request. Folder = item path. Path variables (`:id`) become params. Collection/folder auth is inherited. Collection variables become an environment. |
 | Postman environment (JSON) | One environment. `secret` values are kept, but masked in the UI. |
-| OpenAPI 3.x / Swagger 2.0 (JSON or YAML) | One template per operation. Folder = first tag. `{{baseUrl}}` + path, with `{id}` turned into `{{id}}`. Path params and required query/header params become required params. The JSON body is generated from the schema (example → default → enum → type), and required top-level string fields become params. Security schemes map to auth with env vars. An environment named after the API gets `baseUrl` from `servers[0]` plus the auth variables. |
+| OpenAPI 3.x / Swagger 2.0 (JSON or YAML) | One template per operation. Folder = first tag. `{{baseUrl}}` + path, with `{id}` turned into `{{id}}`. Path params and required query/header params become required params; an `enum` makes them dropdowns (left unselected unless the spec declares a default or example). The JSON body is generated from the schema (example → default → enum → type), and required top-level string fields become params. Security schemes map to auth with env vars. An environment named after the API gets `baseUrl` from `servers[0]` plus the auth variables. |
 
 Unsupported pieces (Postman pre-request/test scripts, file uploads in Postman collections, etc.) are reported as warnings after an import, never silently dropped.
 
@@ -77,7 +78,7 @@ app_state(key, value)            -- last space, last tab, theme, sidebar width
           raw: string, fields: { key, value, enabled, kind: 'text' | 'file' }[] },
   auth: { type: 'none' } | { type: 'bearer', token } | { type: 'basic', username, password }
       | { type: 'apikey', key, value, in: 'header' | 'query' },
-  params: { name, default, required, description }[],
+  params: { name, default, required, description, type?: 'text' | 'select', options?: string[] }[],
 }
 ```
 

@@ -1,7 +1,7 @@
 // Manage the active space's environments and their variables.
 import { useEffect, useRef, useState } from 'react';
 import { confirm } from '@tauri-apps/plugin-dialog';
-import { Check, Eye, EyeOff, Lock, Plus, Trash2 } from 'lucide-react';
+import { Check, Copy, Eye, EyeOff, Lock, Plus, Trash2 } from 'lucide-react';
 import { activeEnvironment, useAppStore } from '../store';
 import type { EnvVariable } from '../types';
 import { GhostButton, Modal, PrimaryButton } from './Modal';
@@ -61,6 +61,21 @@ export function EnvironmentDialog() {
   const add = async () => {
     await saveDraft();
     const env = await createEnvironment(`Environment ${environments.length + 1}`, [{ key: 'baseUrl', value: '', enabled: true }]);
+    if (env) setSelectedId(env.id);
+  };
+
+  /** Copy the selected environment (with unsaved edits and secret values) under a new name. */
+  const duplicate = async () => {
+    if (!selected) return;
+    await saveDraft();
+    const base = `${name.trim() || selected.name} copy`;
+    const taken = new Set(environments.map(e => e.name));
+    let copyName = base;
+    for (let n = 2; taken.has(copyName); n++) copyName = `${base} ${n}`;
+    const env = await createEnvironment(
+      copyName,
+      vars.filter(v => v.key.trim() !== '').map(v => ({ ...v })),
+    );
     if (env) setSelectedId(env.id);
   };
 
@@ -126,6 +141,13 @@ export function EnvironmentDialog() {
               ) : (
                 <GhostButton onClick={() => void setActiveEnvironment(selected.id)}>Set active</GhostButton>
               )}
+              <button
+                onClick={duplicate}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-sm text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]"
+                title="Make a copy of this environment with all its variables"
+              >
+                <Copy className="w-3.5 h-3.5" /> Duplicate
+              </button>
               <button onClick={remove} className="p-1.5 rounded-md text-[var(--text-muted)] hover:text-red-400 hover:bg-red-500/15" title="Delete environment">
                 <Trash2 className="w-4 h-4" />
               </button>
