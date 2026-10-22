@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- KangPos icon: Larik's slate hexagon, cut into an envelope by white gaps,
+       with a cyan paper plane (send) in place of Larik's bolt. -->
+  <defs>
+    <clipPath id="hex">
+      <polygon points="512,56 908,284 908,740 512,968 116,740 116,284" />
+    </clipPath>
+  </defs>
+
+  <polygon points="512,56 908,284 908,740 512,968 116,740 116,284" fill="#37414b" />
+
+  <!-- Envelope folds: the flap and the two lower seams, drawn as gaps -->
+  <g clip-path="url(#hex)" fill="none" stroke="#ffffff" stroke-width="34" stroke-linejoin="miter">
+    <polyline points="90,330 512,610 934,330" />
+    <line x1="90" y1="760" x2="400" y2="535" />
+    <line x1="934" y1="760" x2="624" y2="535" />
+  </g>
+
+  <!-- Paper plane -->
+  <g stroke="#ffffff" stroke-width="30" stroke-linejoin="round" paint-order="stroke">
+    <polygon points="842,228 250,500 486,612 590,846" fill="#18e0f0" />
+    <polygon points="842,228 486,612 520,690" fill="#0fb5c4" />
+  </g>
+</svg>
