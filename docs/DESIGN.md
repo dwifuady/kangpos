@@ -27,9 +27,12 @@ It keeps Larik's model of **workspaces → tabs**, but a new tab starts from a *
 4. **Inputs form.** Declared params show as a form at the top of the tab. Send is blocked while a required one is empty.
    - The UI calls them **Inputs**, not "Params", because Postman's "Params" means query parameters. An input is only sent where a `{{name}}` refers to it.
    - Inputs that nothing refers to are tagged *unused*, and a warning offers **Add as query params** (adds `name={{name}}` rows). Send also shows a toast for unused inputs that have values.
-5. **Tab names come from the template plus a key value,** e.g. `Get contact · 10045`. The key value is the first required param that has a value, or else the first param that has one. Renaming a tab by hand (double-click) pins its title.
-6. **The template picker is a command palette.** Ctrl+T / Ctrl+N → type to filter → Enter. **Blank request** is always the first option.
-7. **No collection tree.** Templates are grouped by `folder` (a path such as `Contacts / Admin`) in the picker and in the sidebar's Templates view.
+5. **Autocomplete.** Typing `{{` in any field (URL, query, headers, auth, body) suggests inputs, then environment variables, then dynamic values, each with its current value. Secret values are masked.
+   - Values are inserted as plain text, so a JSON string needs quotes: `"nama": "{{nama}}"`. Numbers and booleans can go bare: `"jumlah": {{jumlah}}`.
+   - The body's JSON check accepts placeholders in both positions. If the body is no longer valid JSON once values are filled in, Send shows a warning (and still sends).
+6. **Tab names come from the template plus a key value,** e.g. `Get contact · 10045`. The key value is the first required param that has a value, or else the first param that has one. Renaming a tab by hand (double-click) pins its title.
+7. **The template picker is a command palette.** Ctrl+T / Ctrl+N → type to filter → Enter. **Blank request** is always the first option.
+8. **No collection tree.** Templates are grouped by `folder` (a path such as `Contacts / Admin`) in the picker and in the sidebar's Templates view.
 
 ## Import
 

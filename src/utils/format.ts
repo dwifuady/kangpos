@@ -80,3 +80,52 @@ export function formatJsonWithPlaceholders(text: string): string | null {
     return null;
   }
 }
+
+export interface JsonProblem {
+  /** Offset into the original text. */
+  offset: number;
+  message: string;
+}
+
+/**
+ * Check JSON that may contain {{placeholders}}. Placeholders are masked with
+ * text of the same length (a string value outside quotes, plain letters
+ * inside), so a parse error position still points into the original text.
+ */
+export function checkJsonWithPlaceholders(text: string): JsonProblem | null {
+  if (text.trim() === '') return null;
+  let masked = '';
+  let inString = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '{' && text[i + 1] === '{') {
+      const end = text.indexOf('}}', i + 2);
+      if (end > 0) {
+        const length = end + 2 - i;
+        masked += inString ? 'x'.repeat(length) : `"${'_'.repeat(length - 2)}"`;
+        i = end + 1;
+        continue;
+      }
+    }
+    if (ch === '"') {
+      let backslashes = 0;
+      for (let j = i - 1; j >= 0 && text[j] === '\\'; j--) backslashes++;
+      if (backslashes % 2 === 0) inString = !inString;
+    }
+    masked += ch;
+  }
+  try {
+    JSON.parse(masked);
+    return null;
+  } catch (e) {
+    const message = (e as Error).message;
+    const at = /at position (\d+)/.exec(message);
+    const offset = at ? Math.min(Number(at[1]), text.length) : text.length;
+    // Drop V8's echo of the (masked) input and the position suffix.
+    const clean = message
+      .replace(/, "[\s\S]*" is not valid JSON$/, '')
+      .replace(/ in JSON at position \d+.*$/, '')
+      .replace(/^JSON\.parse: /, '');
+    return { offset, message: clean || 'Invalid JSON' };
+  }
+}

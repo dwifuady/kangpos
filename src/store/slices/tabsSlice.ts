@@ -205,6 +205,19 @@ export const createTabsSlice: StateCreator<AppState, [], [], TabsSlice> = (set, 
         });
       }
 
+      // Catch `"nama": {{nama}}` with a text value: the filled-in body is no longer JSON.
+      if (tab.request.body.type === 'json' && built.body.type === 'raw' && built.body.content.trim() !== '' && built.unresolved.length === 0) {
+        try {
+          JSON.parse(built.body.content);
+        } catch {
+          state.addToast({
+            type: 'info',
+            message: 'The body is not valid JSON after filling in values. Text values need quotes, e.g. "nama": "{{nama}}". Sending anyway.',
+            duration: 7000,
+          });
+        }
+      }
+
       const requestId = crypto.randomUUID();
       set(s => ({ inFlight: { ...s.inFlight, [id]: requestId } }));
       let stored: StoredResponse;

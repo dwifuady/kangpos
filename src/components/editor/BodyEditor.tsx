@@ -61,8 +61,22 @@ export function BodyEditor({ body, onChange, ctx, tabId, spaceColor }: BodyEdito
             value={body.raw}
             language={body.type === 'json' ? 'json' : body.type === 'xml' ? 'xml' : 'plaintext'}
             onChange={raw => onChange({ ...body, raw })}
+            variables={ctx}
+            checkJson={body.type === 'json'}
           />
         </div>
+      )}
+      {isRaw && (
+        <p className="text-[11px] text-[var(--text-muted)] -mt-1">
+          Type <span className="font-mono">{'{{'}</span> to insert an input or variable. Values are inserted as plain text
+          {body.type === 'json' && (
+            <>
+              , so text needs quotes: <span className="font-mono">{'"nama": "{{nama}}"'}</span>. Numbers and true/false
+              don't: <span className="font-mono">{'"jumlah": {{jumlah}}'}</span>
+            </>
+          )}
+          .
+        </p>
       )}
       {(body.type === 'form-urlencoded' || body.type === 'multipart') && (
         <div className="overflow-y-auto">

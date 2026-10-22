@@ -224,3 +224,55 @@ describe('unused inputs', () => {
     expect(addParamsAsQuery(s, params).query.map(q => q.key)).toEqual(['blok', 'nomor']);
   });
 });
+
+import { checkJsonWithPlaceholders } from './format';
+import { placeholderPrefix, previewValue, variableSuggestions } from './variables';
+
+describe('variable autocomplete', () => {
+  const c: ResolveContext = {
+    params: [{ name: 'nama', default: '', required: true }],
+    paramValues: { nama: 'Budi' },
+    env: [
+      { key: 'baseUrl', value: 'https://x', enabled: true },
+      { key: 'token', value: 'secret-value', enabled: true, secret: true },
+      { key: 'nameOld', value: 'x', enabled: false },
+    ],
+  };
+
+  it('detects an unfinished placeholder before the caret', () => {
+    expect(placeholderPrefix('{{baseUrl}}/a/{{na')).toBe('na');
+    expect(placeholderPrefix('"x": "{{')).toBe('');
+    expect(placeholderPrefix('{{baseUrl}}/a')).toBeNull();
+    expect(placeholderPrefix('{ "a": 1')).toBeNull();
+  });
+
+  it('suggests inputs, enabled env vars and dynamic vars, masking secrets', () => {
+    const all = variableSuggestions(c, '');
+    expect(all.slice(0, 3)).toEqual([
+      { name: 'nama', source: 'param', preview: 'Budi' },
+      { name: 'baseUrl', source: 'env', preview: 'https://x' },
+      { name: 'token', source: 'env', preview: '••••••' },
+    ]);
+    expect(all.some(s => s.name === 'nameOld')).toBe(false);
+    expect(all.some(s => s.name === '$guid')).toBe(true);
+    expect(variableSuggestions(c, 'TO').map(s => s.name)).toEqual(['token']);
+    expect(variableSuggestions(c, 'time').map(s => s.name)).toEqual(['$timestamp', '$isoTimestamp']);
+    expect(previewValue('token', c)).toBe('••••••');
+    expect(previewValue('nama', c)).toBe('Budi');
+  });
+});
+
+describe('checkJsonWithPlaceholders', () => {
+  it('accepts placeholders as string contents or bare values', () => {
+    expect(checkJsonWithPlaceholders('{"nama": "{{nama}}", "jumlah": {{jumlah}}}')).toBeNull();
+    expect(checkJsonWithPlaceholders('{\n  "nama": {{nama}}\n}')).toBeNull();
+    expect(checkJsonWithPlaceholders('')).toBeNull();
+  });
+
+  it('points at real errors in the original text', () => {
+    const text = '{"a": "{{x}}" "b": 1}';
+    const problem = checkJsonWithPlaceholders(text);
+    expect(problem).not.toBeNull();
+    expect(text.slice(problem!.offset)).toBe('"b": 1}');
+  });
+});
