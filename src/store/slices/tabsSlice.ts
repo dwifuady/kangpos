@@ -4,8 +4,20 @@ import type { StateCreator } from 'zustand';
 import type { AppState } from '..';
 import * as api from '../../api';
 import type { UpdateTabInput } from '../../api';
-import { emptyRequest, type ParamValues, type RequestSpec, type StoredResponse, type Tab, type Template } from '../../types';
-import { buildRequest, toSendInput, unusedParams } from '../../utils/request';
+import { emptyRequest, type ParamValues, type RequestSpec, type ScriptLog, type StoredResponse, type Tab, type Template } from '../../types';
+import { buildRequest, tabTitle, toSendInput, unusedParams, withScheme } from '../../utils/request';
+import { runScript } from '../../scripting/runner';
+import type { OutgoingRequest, SandboxResponse } from '../../scripting/sandbox';
+import {
+  applyEnvChanges,
+  applySandboxRequest,
+  builtToSandbox,
+  envMap,
+  inputMap,
+  runInfo,
+  toSandboxRequest,
+  toSandboxResponse,
+} from '../../scripting/bridge';
 import { defaultParamValues, missingRequiredParams } from '../../utils/variables';
 import { activeEnvironment } from './workspaceSlice';
 
@@ -37,6 +49,8 @@ export interface TabsSlice {
 
 const SAVE_DELAY = 400;
 const pending = new Map<string, { timer: number; input: UpdateTabInput }>();
+// Scripts typed in this app are trusted: approve them shortly after the last keystroke.
+const approveTimers = new Map<string, number>();
 
 export const createTabsSlice: StateCreator<AppState, [], [], TabsSlice> = (set, get) => {
   const toastError = (what: string, e: unknown) =>
@@ -103,7 +117,15 @@ export const createTabsSlice: StateCreator<AppState, [], [], TabsSlice> = (set, 
     editTabRequest: (id, update) => {
       const tab = get().tabs.find(t => t.id === id);
       if (!tab) return;
-      patchTab(id, { request: update(tab.request) });
+      const next = update(tab.request);
+      patchTab(id, { request: next });
+      if (next.scripts.before !== tab.request.scripts.before || next.scripts.after !== tab.request.scripts.after) {
+        window.clearTimeout(approveTimers.get(id));
+        approveTimers.set(
+          id,
+          window.setTimeout(() => void get().approveScripts(tab.space_id, [next.scripts.before, next.scripts.after]), 600),
+        );
+      }
     },
 
     setTabParamValue: (id, name, value) => {
@@ -192,53 +214,129 @@ export const createTabsSlice: StateCreator<AppState, [], [], TabsSlice> = (set, 
         });
       }
 
-      const env = activeEnvironment(state);
-      const built = buildRequest(tab.request, {
-        params: tab.request.params,
-        paramValues: tab.param_values,
-        env: env?.variables ?? [],
-      });
-      if (built.unresolved.length > 0) {
-        state.addToast({
-          type: 'info',
-          message: `Unresolved: ${built.unresolved.map(n => `{{${n}}}`).join(', ')}${env ? '' : ' (no environment selected)'}`,
-        });
-      }
-
-      // Catch `"nama": {{nama}}` with a text value: the filled-in body is no longer JSON.
-      if (tab.request.body.type === 'json' && built.body.type === 'raw' && built.body.content.trim() !== '' && built.unresolved.length === 0) {
-        try {
-          JSON.parse(built.body.content);
-        } catch {
-          state.addToast({
-            type: 'info',
-            message: 'The body is not valid JSON after filling in values. Text values need quotes, e.g. "nama": "{{nama}}". Sending anyway.',
-            duration: 7000,
-          });
-        }
+      const scripts = tab.request.scripts;
+      const hasBefore = scripts.before.trim() !== '';
+      const hasAfter = scripts.after.trim() !== '';
+      const requestName = tabTitle(tab);
+      let runScripts = hasBefore || hasAfter;
+      if (runScripts) {
+        const decision = await get().ensureScriptsAllowed(tab.space_id, requestName, scripts);
+        if (decision === 'cancel') return;
+        runScripts = decision === 'run';
       }
 
       const requestId = crypto.randomUUID();
       set(s => ({ inFlight: { ...s.inFlight, [id]: requestId } }));
-      let stored: StoredResponse;
-      try {
-        const response = await api.sendRequest(toSendInput(built, requestId, state.sendOptions));
-        stored = { response, sentAt: new Date().toISOString(), method: built.method, url: built.url };
-      } catch (e) {
-        stored = {
-          error: e instanceof Error ? e.message : String(e),
-          sentAt: new Date().toISOString(),
-          method: built.method,
-          url: built.url,
-        };
-      } finally {
+      const done = () =>
         set(s => {
           const rest = { ...s.inFlight };
           delete rest[id];
           return { inFlight: rest };
         });
+      const cancelled = () => get().inFlight[id] !== requestId;
+      const save = (stored: StoredResponse) => {
+        if (get().tabs.some(t => t.id === id)) patchTab(id, { response: stored }, true);
+      };
+
+      const info: NonNullable<StoredResponse['scripts']> = {};
+      const inputs = inputMap(tab.request.params, tab.param_values);
+      let spec = tab.request;
+      let locals: Record<string, string> = {};
+      let envVars = activeEnvironment(get())?.variables ?? [];
+
+      /** Save pm.environment changes; with no environment selected they only apply to this send. */
+      const keepEnvChanges = async (changes: Record<string, string | null>, logs: ScriptLog[]) => {
+        if (Object.keys(changes).length === 0) return;
+        const env = activeEnvironment(get());
+        if (!env) {
+          for (const [k, v] of Object.entries(changes)) if (v !== null) locals[k] = v;
+          logs.push({ level: 'warn', message: 'No environment selected: pm.environment changes only apply to this request.' });
+          return;
+        }
+        envVars = applyEnvChanges(env.variables, changes);
+        await get().updateEnvironment(env.id, { variables: envVars });
+      };
+      const sendFromScript = async (req: OutgoingRequest): Promise<SandboxResponse> => {
+        const response = await api.sendRequest({
+          requestId: crypto.randomUUID(),
+          method: req.method,
+          url: withScheme(req.url),
+          headers: req.headers,
+          body: req.body !== undefined ? { type: 'raw', content: req.body } : { type: 'none' },
+          options: get().sendOptions,
+        });
+        return toSandboxResponse(response);
+      };
+      const envName = () => activeEnvironment(get())?.name ?? null;
+
+      try {
+        if (runScripts && hasBefore) {
+          const out = await runScript(
+            scripts.before,
+            { kind: 'before', requestName, envName: envName(), env: envMap(envVars), inputs, request: toSandboxRequest(spec) },
+            { sendRequest: sendFromScript },
+          );
+          info.before = runInfo(out);
+          if (cancelled()) return;
+          if (out.error) {
+            save({ error: `Before script failed: ${out.error}`, sentAt: new Date().toISOString(), method: spec.method, url: spec.url, scripts: info });
+            return;
+          }
+          await keepEnvChanges(out.envChanges, info.before.logs);
+          locals = { ...locals, ...out.locals };
+          spec = applySandboxRequest(spec, out.request);
+        }
+
+        const built = buildRequest(spec, { params: spec.params, paramValues: tab.param_values, env: envVars, locals });
+        if (built.unresolved.length > 0) {
+          get().addToast({
+            type: 'info',
+            message: `Unresolved: ${built.unresolved.map(n => `{{${n}}}`).join(', ')}${activeEnvironment(get()) ? '' : ' (no environment selected)'}`,
+          });
+        }
+        // Catch `"nama": {{nama}}` with a text value: the filled-in body is no longer JSON.
+        if (spec.body.type === 'json' && built.body.type === 'raw' && built.body.content.trim() !== '' && built.unresolved.length === 0) {
+          try {
+            JSON.parse(built.body.content);
+          } catch {
+            get().addToast({
+              type: 'info',
+              message: 'The body is not valid JSON after filling in values. Text values need quotes, e.g. "nama": "{{nama}}". Sending anyway.',
+              duration: 7000,
+            });
+          }
+        }
+
+        let stored: StoredResponse;
+        try {
+          const response = await api.sendRequest(toSendInput(built, requestId, get().sendOptions));
+          stored = { response, sentAt: new Date().toISOString(), method: built.method, url: built.url };
+        } catch (e) {
+          stored = { error: e instanceof Error ? e.message : String(e), sentAt: new Date().toISOString(), method: built.method, url: built.url };
+        }
+
+        if (runScripts && hasAfter && stored.response && !cancelled()) {
+          const out = await runScript(
+            scripts.after,
+            {
+              kind: 'after',
+              requestName,
+              envName: envName(),
+              env: { ...envMap(envVars), ...locals },
+              inputs,
+              request: builtToSandbox(built),
+              response: toSandboxResponse(stored.response),
+            },
+            { sendRequest: sendFromScript },
+          );
+          info.after = runInfo(out);
+          await keepEnvChanges(out.envChanges, info.after.logs);
+        }
+        if (info.before || info.after) stored.scripts = info;
+        save(stored);
+      } finally {
+        done();
       }
-      if (get().tabs.some(t => t.id === id)) patchTab(id, { response: stored }, true);
     },
 
     cancelTab: async (id) => {

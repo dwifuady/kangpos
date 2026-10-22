@@ -8,7 +8,10 @@ A template-first API client, built on the layout and stack of [Larik SQL Studio]
   `Get contact` tabs with different payloads.
 - **Params** (`{{id}}`) are filled per tab in a small form; anything else in `{{…}}` comes from the
   active **environment**.
-- **Import** Postman collections, Postman environments and OpenAPI 3 / Swagger 2 (JSON or YAML).
+- **Scripts** before the request and after the response, with a Postman-style `pm` API (tests,
+  saving values to the environment, `pm.sendRequest`), run in a sandboxed worker.
+- **Import** Postman collections (including their scripts), Postman environments and OpenAPI 3 /
+  Swagger 2 (JSON or YAML).
 
 See [docs/DESIGN.md](docs/DESIGN.md) for the model and the rules (tabs are snapshots, etc.).
 

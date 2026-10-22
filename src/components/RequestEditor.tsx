@@ -15,9 +15,10 @@ import { AuthEditor } from './editor/AuthEditor';
 import { ParamsForm } from './editor/ParamsForm';
 import { ParamDefinitions } from './editor/ParamDefinitions';
 import { ResponseViewer } from './editor/ResponseViewer';
+import { ScriptsEditor } from './editor/ScriptsEditor';
 import { ContextMenu, type MenuItem } from './ContextMenu';
 
-type Section = 'params' | 'query' | 'headers' | 'body' | 'auth';
+type Section = 'params' | 'query' | 'headers' | 'body' | 'auth' | 'scripts';
 
 // Remember the open section per tab while the app runs.
 const sectionByTab = new Map<string, Section>();
@@ -148,6 +149,12 @@ export function RequestEditor({ tab }: { tab: Tab }) {
     { id: 'headers', label: 'Headers', badge: counts.headers ? String(counts.headers) : undefined },
     { id: 'body', label: 'Body', badge: request.body.type !== 'none' ? request.body.type.replace('form-urlencoded', 'form') : undefined },
     { id: 'auth', label: 'Auth', badge: request.auth.type !== 'none' ? request.auth.type : undefined },
+    {
+      id: 'scripts',
+      label: 'Scripts',
+      badge:
+        [request.scripts.before.trim() && 'before', request.scripts.after.trim() && 'after'].filter(Boolean).join(' + ') || undefined,
+    },
   ];
 
   return (
@@ -290,6 +297,7 @@ export function RequestEditor({ tab }: { tab: Tab }) {
             {section === 'headers' && <KeyValueTable rows={request.headers} onChange={headers => edit({ headers })} ctx={ctx} makeRow={makeKeyValue} keyPlaceholder="Header" />}
             {section === 'body' && <BodyEditor body={request.body} onChange={body => edit({ body })} ctx={ctx} tabId={tab.id} spaceColor={spaceColor} />}
             {section === 'auth' && <AuthEditor auth={request.auth} onChange={auth => edit({ auth })} ctx={ctx} />}
+            {section === 'scripts' && <ScriptsEditor scripts={request.scripts} onChange={scripts => edit({ scripts })} tabId={tab.id} spaceColor={spaceColor} />}
           </div>
         </div>
 

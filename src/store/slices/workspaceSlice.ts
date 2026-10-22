@@ -104,6 +104,9 @@ export const createWorkspaceSlice: StateCreator<AppState, [], [], WorkspaceSlice
       const space = await api.linkSpaceFolder(spaceId, path).catch(fail('Could not link folder'));
       if (!space) return false;
       replaceSpace(space);
+      // Scripts already in the space were written here: trust them.
+      const own = await api.listTemplates(spaceId).catch(() => []);
+      await get().approveScripts(spaceId, own.flatMap(t => [t.request.scripts.before, t.request.scripts.after]));
       setStatus(await api.getSyncStatus(spaceId).catch(() => null), spaceId);
       get().addToast({ type: 'success', message: `Templates and environments are now saved in ${space.sync_dir}` });
       return true;
@@ -157,6 +160,7 @@ export const createWorkspaceSlice: StateCreator<AppState, [], [], WorkspaceSlice
         const space = spaces.find(s => s.id === lastSpaceId) ?? spaces[0] ?? null;
         set({ spaces, sidebarWidth, sendOptions, lastTabBySpace: lastTabs, activeSpaceId: space?.id ?? null });
         if (space) await loadSpaceContents(space.id, lastTabs[space.id]);
+        await get().loadScriptTrust();
         // Folder status (missing folder, unreadable files) for linked spaces.
         const statuses = await Promise.all(
           spaces.filter(s => s.sync_dir).map(s => api.getSyncStatus(s.id).catch(() => null)),
@@ -256,6 +260,8 @@ export const createWorkspaceSlice: StateCreator<AppState, [], [], WorkspaceSlice
       const spaceId = get().activeSpaceId;
       if (!spaceId) return;
       if (result.templates.length > 0) {
+        // Importing is the user's choice: trust the scripts that came with it.
+        await get().approveScripts(spaceId, result.templates.flatMap(t => [t.request.scripts.before, t.request.scripts.after]));
         const created = await api.createTemplates(
           result.templates.map(t => ({ space_id: spaceId, name: t.name, folder: t.folder, request: t.request })),
         );

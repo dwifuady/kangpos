@@ -25,6 +25,8 @@ export function FolderSyncSection({ space }: { space: Space }) {
   const linkFolder = useAppStore(s => s.linkFolder);
   const unlinkFolder = useAppStore(s => s.unlinkFolder);
   const reloadFolder = useAppStore(s => s.reloadFolder);
+  const trustAll = useAppStore(s => !!s.scriptTrust[space.id]?.all);
+  const setSpaceScriptTrust = useAppStore(s => s.setSpaceScriptTrust);
   const [busy, setBusy] = useState(false);
 
   const run = async (fn: () => Promise<unknown>) => {
@@ -76,6 +78,20 @@ export function FolderSyncSection({ space }: { space: Space }) {
             {space.sync_dir}
           </div>
           <SyncDetails status={status} />
+          <label className="flex items-start gap-2 mt-2 text-[12px] text-[var(--text-secondary)] cursor-pointer">
+            <input
+              type="checkbox"
+              checked={trustAll}
+              onChange={e => void setSpaceScriptTrust(space.id, e.target.checked)}
+              className="mt-0.5 accent-[var(--accent-color)]"
+            />
+            <span>
+              Run scripts from this folder without asking
+              <span className="block text-[11px] text-[var(--text-muted)]">
+                Off: KangPos asks before running a script that arrived or changed through the folder (e.g. git pull).
+              </span>
+            </span>
+          </label>
           <div className="flex gap-1.5 mt-2">
             <button
               onClick={() => run(() => reloadFolder(space.id))}

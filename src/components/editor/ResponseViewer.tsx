@@ -1,17 +1,24 @@
 import { useEffect, useMemo, useState } from 'react';
 import { writeText } from '@tauri-apps/plugin-clipboard-manager';
 import { save } from '@tauri-apps/plugin-dialog';
-import { AlertTriangle, Copy, Download, FileQuestion, Send } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Copy, Download, FileQuestion, Send, XCircle } from 'lucide-react';
 import * as api from '../../api';
-import type { StoredResponse } from '../../types';
+import type { ScriptLog, ScriptTest, StoredResponse } from '../../types';
 import { formatBytes, formatDuration, languageFor, prettyJson, statusColor } from '../../utils/format';
 import { bytesToBase64, detectPreview, responseBytes, suggestedFileName } from '../../utils/binary';
 import { CodeEditor } from './CodeEditor';
 import { useAppStore } from '../../store';
 
-type View = 'preview' | 'pretty' | 'raw' | 'headers';
+type View = 'preview' | 'pretty' | 'raw' | 'headers' | 'tests' | 'console';
 
-const VIEW_LABEL: Record<View, string> = { preview: 'Preview', pretty: 'Pretty', raw: 'Raw', headers: 'Headers' };
+const VIEW_LABEL: Record<View, string> = { preview: 'Preview', pretty: 'Pretty', raw: 'Raw', headers: 'Headers', tests: 'Tests', console: 'Console' };
+
+const LOG_COLOR: Record<ScriptLog['level'], string> = {
+  log: 'text-[var(--text-primary)]',
+  info: 'text-[var(--text-secondary)]',
+  warn: 'text-amber-400',
+  error: 'text-red-400',
+};
 
 export function ResponseViewer({ stored, sending, onCancel, tabId }: { stored: StoredResponse | null; sending: boolean; onCancel: () => void; tabId: string }) {
   const addToast = useAppStore(s => s.addToast);
@@ -32,13 +39,32 @@ export function ResponseViewer({ stored, sending, onCancel, tabId }: { stored: S
   const language = useMemo(() => (response && body !== null ? languageFor(response.contentType, body) : 'plaintext'), [response, body]);
   const pretty = useMemo(() => (body !== null && language === 'json' ? prettyJson(body) : (body ?? '')), [body, language]);
 
+  // Script results: tests from both scripts, console output tagged by script.
+  const scriptInfo = stored?.scripts;
+  const tests: (ScriptTest & { phase: string })[] = [
+    ...(scriptInfo?.before?.tests ?? []).map(t => ({ ...t, phase: 'before' })),
+    ...(scriptInfo?.after?.tests ?? []).map(t => ({ ...t, phase: 'after' })),
+  ];
+  const logs: (ScriptLog & { phase: string })[] = [
+    ...(scriptInfo?.before?.logs ?? []).map(l => ({ ...l, phase: 'before' })),
+    ...(scriptInfo?.after?.logs ?? []).map(l => ({ ...l, phase: 'after' })),
+  ];
+  const passed = tests.filter(t => t.passed).length;
+  const scriptError = scriptInfo?.before?.error ?? scriptInfo?.after?.error;
+
   const views: View[] = [];
-  if (preview) views.push('preview');
-  if (body !== null) views.push('pretty', 'raw');
-  views.push('headers');
+  if (response) {
+    if (preview) views.push('preview');
+    if (body !== null) views.push('pretty', 'raw');
+    views.push('headers');
+  }
+  if (tests.length > 0) views.push('tests');
+  if (logs.length > 0) views.push('console');
 
   // Images and PDFs open in Preview; text (including HTML) opens as Pretty.
-  const defaultView: View = preview && (preview.kind !== 'html' || body === null) ? 'preview' : body !== null ? 'pretty' : 'headers';
+  const defaultView: View = !response
+    ? tests.length > 0 ? 'tests' : 'console'
+    : preview && (preview.kind !== 'html' || body === null) ? 'preview' : body !== null ? 'pretty' : 'headers';
   const [view, setView] = useState<View>(defaultView);
   useEffect(() => setView(defaultView), [stored?.sentAt, tabId]); // eslint-disable-line react-hooks/exhaustive-deps -- reset per response
   const activeView = views.includes(view) ? view : defaultView;
@@ -109,6 +135,20 @@ export function ResponseViewer({ stored, sending, onCancel, tabId }: { stored: S
             )}
           </>
         )}
+        {tests.length > 0 && (
+          <button
+            onClick={() => setView('tests')}
+            className={`text-[11px] font-medium px-1.5 py-0.5 rounded ${passed === tests.length ? 'bg-green-500/15 text-green-400' : 'bg-red-500/15 text-red-400'}`}
+            title="Test results"
+          >
+            Tests {passed}/{tests.length}
+          </button>
+        )}
+        {scriptError && (
+          <button onClick={() => setView('console')} className="text-[11px] font-medium px-1.5 py-0.5 rounded bg-red-500/15 text-red-400" title={scriptError}>
+            Script error
+          </button>
+        )}
         {stored && (
           <span className="text-[10px] text-[var(--text-muted)] truncate min-w-0" title={`${stored.method} ${stored.url}`}>
             {new Date(stored.sentAt).toLocaleTimeString()} · {stored.method} {stored.url}
@@ -120,18 +160,18 @@ export function ResponseViewer({ stored, sending, onCancel, tabId }: { stored: S
               Cancel
             </button>
           )}
+          {views.map(v => (
+            <button
+              key={v}
+              onClick={() => setView(v)}
+              className={`px-2 py-0.5 rounded-md text-[12px] ${activeView === v ? 'bg-[var(--bg-active)] text-[var(--text-primary)]' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}`}
+            >
+              {v === 'headers' && response ? `Headers (${response.headers.length})` : v === 'console' ? `Console (${logs.length})` : VIEW_LABEL[v]}
+            </button>
+          ))}
           {response && (
             <>
-              {views.map(v => (
-                <button
-                  key={v}
-                  onClick={() => setView(v)}
-                  className={`px-2 py-0.5 rounded-md text-[12px] ${activeView === v ? 'bg-[var(--bg-active)] text-[var(--text-primary)]' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}`}
-                >
-                  {v === 'headers' ? `Headers (${response.headers.length})` : VIEW_LABEL[v]}
-                </button>
-              ))}
-              {activeView !== 'preview' && (body !== null || activeView === 'headers') && (
+              {activeView !== 'preview' && activeView !== 'tests' && activeView !== 'console' && (body !== null || activeView === 'headers') && (
                 <button
                   onClick={() => copy(activeView === 'headers' ? response.headers.map(([k, v]) => `${k}: ${v}`).join('\n') : activeView === 'pretty' ? pretty : (body ?? ''))}
                   className="p-1 rounded-md text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]"
@@ -163,8 +203,36 @@ export function ResponseViewer({ stored, sending, onCancel, tabId }: { stored: S
         )}
         {stored?.error && (
           <div className="m-1 p-3 rounded-md border border-red-500/30 bg-red-500/10 text-red-400 text-[13px] break-words">
-            <div className="font-semibold mb-1">Request failed</div>
+            <div className="font-semibold mb-1">{stored.error.startsWith('Before script failed') ? 'Not sent' : 'Request failed'}</div>
             {stored.error}
+          </div>
+        )}
+
+        {activeView === 'tests' && tests.length > 0 && (
+          <div className="h-full overflow-auto px-1 py-1 space-y-0.5">
+            {tests.map((t, i) => (
+              <div key={i} className="flex items-start gap-2 px-2 py-1 rounded hover:bg-[var(--bg-hover)] text-[13px]">
+                {t.passed ? <CheckCircle2 className="w-4 h-4 text-green-400 shrink-0 mt-0.5" /> : <XCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />}
+                <div className="min-w-0">
+                  <div className="text-[var(--text-primary)]">
+                    {t.name}
+                    {t.phase === 'before' && <span className="ml-1.5 text-[10px] text-[var(--text-muted)]">before script</span>}
+                  </div>
+                  {t.error && <div className="text-[12px] text-red-400 font-mono break-words">{t.error}</div>}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {activeView === 'console' && logs.length > 0 && (
+          <div className="h-full overflow-auto px-1 py-1 font-mono text-[12px]">
+            {logs.map((l, i) => (
+              <div key={i} className="flex gap-2 px-2 py-0.5 border-b border-[var(--border-subtle)]">
+                <span className="shrink-0 w-12 text-[10px] uppercase text-[var(--text-muted)] pt-0.5">{l.phase}</span>
+                <pre className={`whitespace-pre-wrap break-words m-0 font-mono ${LOG_COLOR[l.level]}`}>{l.message}</pre>
+              </div>
+            ))}
           </div>
         )}
 

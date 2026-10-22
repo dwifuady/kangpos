@@ -79,6 +79,7 @@ app_state(key, value)            -- last space, last tab, theme, sidebar width
   auth: { type: 'none' } | { type: 'bearer', token } | { type: 'basic', username, password }
       | { type: 'apikey', key, value, in: 'header' | 'query' },
   params: { name, default, required, description, type?: 'text' | 'select', options?: string[] }[],
+  scripts: { before: string, after: string },   // JavaScript, Postman-style pm API
 }
 ```
 
@@ -89,6 +90,26 @@ app_state(key, value)            -- last space, last tab, theme, sidebar width
 3. Build the final URL (base URL + enabled query rows) and the body (`form-urlencoded` is encoded in TS; `multipart` is sent as fields to Rust).
 4. `send_request` in Rust → `{ status, statusText, headers, body | bodyBase64, size, durationMs }`.
 5. The response is saved on the tab. Bodies over 2 MB are truncated in storage only.
+
+## Scripts (before request / after response)
+
+Each request has two optional JavaScript scripts, edited in the **Scripts** section. They are part of the template, so they're shared through folder sync and copied into each tab. The API is the commonly used subset of Postman's `pm`:
+
+| | |
+|---|---|
+| `pm.environment` / `pm.collectionVariables` / `pm.globals` | get, set, unset, has, toObject, replaceIn. All three map to the active environment; changes are saved to it. |
+| `pm.variables` | get (local → input → environment), set (this send only, wins over everything), replaceIn |
+| `pm.request` | method, url (+ `url.query`), headers (add, upsert, remove, get), body.raw. Editable in before scripts; read-only (what was sent) in after scripts. |
+| `pm.response` | code, status, headers, json(), text(), responseTime, responseSize, `to.have.status/header/jsonBody`, `to.be.ok/success/clientError/serverError/json` |
+| `pm.test`, `pm.expect` | sync or async tests; chai-style assertions (equal, eql, a/an, include, property, lengthOf, above/below, match, oneOf, not, ...) |
+| `pm.sendRequest` | callback or `await`; goes through the Rust HTTP client (no CORS) and is logged in the console |
+| also | `console.*`, legacy `postman.setEnvironmentVariable`, `tests["name"] = bool`, `responseBody`, `responseCode` |
+
+- **Order:** before script → `{{placeholders}}` resolved (script locals first) → send → after script. A before-script error means the request is **not sent**.
+- **Sandbox:** each run gets a fresh Web Worker (`src/scripting/worker.ts`). Workers can't reach the app's Tauri bridge, and the worker deletes `fetch`, `XMLHttpRequest`, `WebSocket`, `importScripts`, storage APIs, etc. before running code, so `pm.sendRequest` is the only way out. Each run has a 10 s limit (time waiting on `pm.sendRequest` doesn't count). There's no `require()`; `crypto` (Web Crypto), `btoa`/`atob` and `TextEncoder` are available.
+- **Results** go on the tab's last response: a **Tests** view (pass/fail, badge `Tests 2/3`) and a **Console** view with output from both scripts.
+- **Postman import** brings scripts across: collection → folder → request, each block labelled `// From collection "X"`. Features KangPos lacks (`require`, `pm.cookies`, `pm.visualizer`, `setNextRequest`, ...) are reported as import warnings.
+- **Trust (folder-synced spaces only):** a script runs without asking if this exact text was approved before. Scripts typed in the app, present when the folder was linked, or imported here are approved automatically. Anything new or changed through the folder (e.g. `git pull`) shows a prompt with the code: run it, trust the whole space, send without scripts, or cancel. Approvals are SHA-256 hashes in local app state, never in the folder.
 
 ## Folder sync (optional, per space)
 
@@ -127,8 +148,8 @@ environments/dev.yaml            one file per environment; secret values left ou
 ## Later
 
 - Request history per tab
-- Pre-request scripts / response tests
-- Chained values (pull `token` from a login response into the environment)
+- Space-level scripts that run before every request (Postman's collection-level scripts)
+- Autocomplete for `pm.` in the script editor
 - Export to Postman collection / OpenAPI
 - Bulk run: one template × rows of params (CSV)
 - Secrets in the OS keychain (Larik already does this for passwords)

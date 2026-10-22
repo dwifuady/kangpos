@@ -14,6 +14,8 @@ export interface ResolveContext {
   params: TemplateParam[];
   paramValues: ParamValues;
   env: EnvVariable[];
+  /** Values set by a before script with pm.variables.set(); they win over the environment. */
+  locals?: Record<string, string>;
 }
 
 const DYNAMIC: Record<string, () => string> = {
@@ -44,6 +46,7 @@ function envLookup(env: EnvVariable[], name: string): string | undefined {
 
 /** Where a placeholder's value would come from. */
 export function classifyVariable(name: string, ctx: ResolveContext): VariableSource {
+  if (ctx.locals && Object.hasOwn(ctx.locals, name)) return 'env';
   if (ctx.params.some(p => p.name === name)) return 'param';
   if (isDynamicVariable(name)) return 'dynamic';
   if (envLookup(ctx.env, name) !== undefined) return 'env';
@@ -71,7 +74,8 @@ export function resolveText(
     const name = rawName.trim();
     const param = ctx.params.find(p => p.name === name);
     let value: string | undefined;
-    if (param) value = paramValue(param, ctx.paramValues);
+    if (ctx.locals && Object.hasOwn(ctx.locals, name)) value = ctx.locals[name];
+    else if (param) value = paramValue(param, ctx.paramValues);
     else if (isDynamicVariable(name)) value = DYNAMIC[name]();
     else value = envLookup(ctx.env, name);
 

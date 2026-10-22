@@ -90,7 +90,8 @@ describe('Postman collection', () => {
     expect(result.environments).toEqual([
       { name: 'Hub variables', variables: [{ key: 'baseUrl', value: 'https://hub.test', enabled: true }] },
     ]);
-    expect(result.warnings.join(' ')).toMatch(/scripts are not supported/);
+    expect(result.warnings).toEqual([]);
+    expect(result.templates[0].request.scripts).toEqual({ before: '', after: 'pm.test("ok", () => {})' });
   });
 });
 
@@ -303,5 +304,37 @@ describe('OpenAPI enums become dropdown inputs', () => {
       }),
     );
     expect(result.templates[0].request.params[0]).toMatchObject({ name: 'sort', type: 'select', options: ['asc', 'desc'] });
+  });
+});
+
+describe('Postman scripts', () => {
+  it('imports scripts with collection and folder scripts first, labelled', () => {
+    const result = importDocument(
+      JSON.stringify({
+        info: { name: 'Hub' },
+        event: [{ listen: 'prerequest', script: { exec: ["pm.variables.set('ts', Date.now());"] } }],
+        item: [
+          {
+            name: 'Contacts',
+            event: [{ listen: 'test', script: { exec: ['pm.test("2xx", () => pm.response.to.be.success);'] } }],
+            item: [
+              {
+                name: 'Get contact',
+                event: [
+                  { listen: 'prerequest', script: { exec: ["const CryptoJS = require('crypto-js');"] } },
+                  { listen: 'test', script: { exec: ["pm.environment.set('id', pm.response.json().id);"] } },
+                ],
+                request: { method: 'GET', url: 'https://x.test' },
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    expect(result.templates[0].request.scripts).toEqual({
+      before: "// From collection \"Hub\"\npm.variables.set('ts', Date.now());\n\nconst CryptoJS = require('crypto-js');",
+      after: "// From folder \"Contacts\"\npm.test(\"2xx\", () => pm.response.to.be.success);\n\npm.environment.set('id', pm.response.json().id);",
+    });
+    expect(result.warnings.join(' ')).toMatch(/require\(\)/);
   });
 });

@@ -196,7 +196,40 @@ function convertBody(body: any, request: RequestSpec, warnings: WarningList): vo
   }
 }
 
-function convertRequest(item: any, inheritedAuth: AuthSpec, warnings: WarningList): RequestSpec {
+/** Scripts inherited from the collection and parent folders, outermost first. */
+interface InheritedScripts {
+  before: string[];
+  after: string[];
+}
+
+/** The code of an item's pre-request ('prerequest') or test ('test') script. */
+function eventScript(item: any, listen: 'prerequest' | 'test'): string {
+  const events = Array.isArray(item?.event) ? item.event : [];
+  return events
+    .filter((e: any) => e?.listen === listen && !e.disabled)
+    .map((e: any) => (Array.isArray(e.script?.exec) ? e.script.exec.join('\n') : str(e.script?.exec)))
+    .filter((code: string) => code.trim() !== '')
+    .join('\n\n');
+}
+
+/** Labelled block so you can see where an inherited script came from. */
+function labelled(source: string, code: string): string {
+  return code.trim() === '' ? '' : `// From ${source}\n${code.trim()}`;
+}
+
+const UNSUPPORTED_SCRIPT_FEATURES: [RegExp, string][] = [
+  [/\brequire\s*\(/, 'Some scripts use require(); KangPos scripts have no libraries (crypto, btoa/atob are built in)'],
+  [/\bpm\.cookies\b/, 'Some scripts use pm.cookies, which KangPos does not support'],
+  [/\bpm\.visualizer\b/, 'Some scripts use pm.visualizer, which KangPos does not support'],
+  [/\bpm\.vault\b/, 'Some scripts use pm.vault, which KangPos does not support'],
+  [/setNextRequest|pm\.execution\./, 'Some scripts control the run order (setNextRequest / pm.execution); KangPos runs one request at a time'],
+];
+
+function checkScript(code: string, warnings: WarningList): void {
+  for (const [pattern, message] of UNSUPPORTED_SCRIPT_FEATURES) if (pattern.test(code)) warnings.add(message);
+}
+
+function convertRequest(item: any, inheritedAuth: AuthSpec, inheritedScripts: InheritedScripts, warnings: WarningList): RequestSpec {
   const src = typeof item.request === 'string' ? { url: item.request, method: 'GET' } : item.request ?? {};
   const request = emptyRequest();
 
@@ -222,9 +255,13 @@ function convertRequest(item: any, inheritedAuth: AuthSpec, warnings: WarningLis
   convertBody(src.body, request, warnings);
   request.auth = convertAuth(src.auth, warnings) ?? inheritedAuth;
 
-  if (Array.isArray(item.event) && item.event.some((e: any) => scriptHasCode(e?.script))) {
-    warnings.add('Pre-request and test scripts are not supported and were skipped');
-  }
+  // Postman runs collection, then folder, then request scripts.
+  const join = (parts: string[]) => parts.filter(p => p.trim() !== '').join('\n\n');
+  request.scripts = {
+    before: join([...inheritedScripts.before, eventScript(item, 'prerequest')]),
+    after: join([...inheritedScripts.after, eventScript(item, 'test')]),
+  };
+  checkScript(request.scripts.before + '\n' + request.scripts.after, warnings);
   return request;
 }
 
@@ -243,40 +280,37 @@ function parseHeaderBlock(block: string): KeyValue[] {
     });
 }
 
-function scriptHasCode(script: any): boolean {
-  if (!script) return false;
-  const exec = Array.isArray(script.exec) ? script.exec.join('\n') : str(script.exec);
-  return exec.trim() !== '';
-}
-
 export function importPostmanCollection(doc: any): ImportResult {
   const warnings = new WarningList();
   const templates: ImportedTemplate[] = [];
   const rootAuth = convertAuth(doc.auth, warnings) ?? { type: 'none' };
 
-  if (Array.isArray(doc.event) && doc.event.some((e: any) => scriptHasCode(e?.script))) {
-    warnings.add('Collection-level scripts are not supported and were skipped');
-  }
+  const collectionName = str(doc.info?.name) || 'collection';
+  const rootScripts: InheritedScripts = {
+    before: [labelled(`collection "${collectionName}"`, eventScript(doc, 'prerequest'))],
+    after: [labelled(`collection "${collectionName}"`, eventScript(doc, 'test'))],
+  };
 
-  const walk = (items: any[], folderPath: string[], auth: AuthSpec) => {
+  const walk = (items: any[], folderPath: string[], auth: AuthSpec, scripts: InheritedScripts) => {
     for (const item of items) {
       if (!item || typeof item !== 'object') continue;
       if (Array.isArray(item.item)) {
         const folderAuth = convertAuth(item.auth, warnings) ?? auth;
-        if (Array.isArray(item.event) && item.event.some((e: any) => scriptHasCode(e?.script))) {
-          warnings.add('Folder-level scripts are not supported and were skipped');
-        }
-        walk(item.item, [...folderPath, str(item.name) || 'Folder'], folderAuth);
+        const folderName = str(item.name) || 'Folder';
+        walk(item.item, [...folderPath, folderName], folderAuth, {
+          before: [...scripts.before, labelled(`folder "${folderName}"`, eventScript(item, 'prerequest'))],
+          after: [...scripts.after, labelled(`folder "${folderName}"`, eventScript(item, 'test'))],
+        });
       } else if (item.request) {
         templates.push({
           name: str(item.name) || 'Request',
           folder: folderPath.join(' / '),
-          request: convertRequest(item, auth, warnings),
+          request: convertRequest(item, auth, scripts, warnings),
         });
       }
     }
   };
-  walk(doc.item, [], rootAuth);
+  walk(doc.item, [], rootAuth, rootScripts);
 
   const name = str(doc.info?.name) || 'Postman collection';
   const collectionVars: EnvVariable[] = (Array.isArray(doc.variable) ? doc.variable : [])

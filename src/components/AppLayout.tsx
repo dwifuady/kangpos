@@ -20,6 +20,7 @@ import { SettingsDialog } from './SettingsDialog';
 import { ToastContainer } from './Toast';
 import { ErrorBoundary } from './ErrorBoundary';
 import { FolderSyncBanner } from './FolderSync';
+import { ScriptTrustDialog } from './ScriptTrustDialog';
 import type { SyncEvent } from '../types';
 
 export function AppLayout() {
@@ -282,6 +283,7 @@ export function AppLayout() {
       <SaveTemplateDialog />
       <ImportDialog />
       <SettingsDialog />
+      <ScriptTrustDialog />
       <ToastContainer />
     </div>
   );

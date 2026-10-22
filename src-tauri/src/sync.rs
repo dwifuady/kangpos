@@ -71,6 +71,7 @@ struct SyncEvent {
 /// Keys in the order they are written; anything else follows alphabetically.
 const KEY_ORDER: &[&str] = &[
     "kangpos", "id", "name", "color", "method", "url", "params", "query", "headers", "body", "auth",
+    "scripts", "before", "after",
     "variables", "type", "key", "value", "enabled", "secret", "kind", "default", "required", "options",
     "description", "raw", "fields", "token", "username", "password", "in",
 ];
@@ -82,7 +83,8 @@ const STRING_KEYS: &[&str] = &[
 ];
 
 /// Drop values that only add noise to diffs: nulls, empty lists, empty
-/// `raw`/`description`, and `body`/`auth` objects of type "none".
+/// `raw`/`description`/script text, `body`/`auth` objects of type "none",
+/// and a `scripts` object with no scripts.
 fn clean(value: &Value) -> Value {
     match value {
         Value::Object(map) => {
@@ -91,13 +93,17 @@ fn clean(value: &Value) -> Value {
                 if v.is_null() || matches!(v, Value::Array(a) if a.is_empty()) {
                     continue;
                 }
-                if (k == "raw" || k == "description") && v.as_str() == Some("") {
+                if matches!(k.as_str(), "raw" | "description" | "before" | "after") && v.as_str().is_some_and(|t| t.trim().is_empty()) {
                     continue;
                 }
                 if (k == "body" || k == "auth") && v.get("type").and_then(Value::as_str) == Some("none") {
                     continue;
                 }
-                out.insert(k.clone(), clean(v));
+                let cleaned = clean(v);
+                if k == "scripts" && cleaned.as_object().is_some_and(|o| o.is_empty()) {
+                    continue;
+                }
+                out.insert(k.clone(), cleaned);
             }
             Value::Object(out)
         }
@@ -1189,5 +1195,26 @@ mod dropdown_tests {
         );
         let back = parse_yaml(&text).unwrap();
         assert_eq!(back["params"][0]["options"], json!(["open", "closed"]));
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod script_file_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn scripts_are_blocks_and_empty_ones_are_left_out() {
+        let with = render(&template_document("a", "Login", &json!({
+            "method": "POST", "url": "x", "auth": {"type": "none"},
+            "scripts": {"before": "", "after": "pm.test('ok', () => {\n  pm.response.to.have.status(200);\n});"}
+        }))).unwrap();
+        assert!(with.ends_with("scripts:\n  after: |-\n    pm.test('ok', () => {\n      pm.response.to.have.status(200);\n    });\n"), "{with}");
+
+        let without = render(&template_document("a", "Login", &json!({
+            "method": "GET", "url": "x", "scripts": {"before": "  ", "after": ""}
+        }))).unwrap();
+        assert!(!without.contains("scripts"), "{without}");
     }
 }

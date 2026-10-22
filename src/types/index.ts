@@ -53,6 +53,13 @@ export interface RequestSpec {
   body: RequestBody;
   auth: AuthSpec;
   params: TemplateParam[];
+  /** JavaScript run before the request is sent and after the response arrives (Postman-style `pm` API). */
+  scripts: RequestScripts;
+}
+
+export interface RequestScripts {
+  before: string;
+  after: string;
 }
 
 export type ParamValues = Record<string, string>;
@@ -118,6 +125,27 @@ export interface StoredResponse {
   sentAt: string;
   method: string;
   url: string;
+  /** What the before/after scripts did on this send. */
+  scripts?: { before?: ScriptRunInfo; after?: ScriptRunInfo };
+}
+
+export interface ScriptTest {
+  name: string;
+  passed: boolean;
+  error?: string;
+}
+
+export interface ScriptLog {
+  level: 'log' | 'info' | 'warn' | 'error';
+  message: string;
+}
+
+/** The visible outcome of one script run. */
+export interface ScriptRunInfo {
+  tests: ScriptTest[];
+  logs: ScriptLog[];
+  error?: string;
+  durationMs: number;
 }
 
 export interface Tab {
@@ -171,6 +199,7 @@ export function emptyRequest(): RequestSpec {
     body: { type: 'none', raw: '', fields: [] },
     auth: { type: 'none' },
     params: [],
+    scripts: { before: '', after: '' },
   };
 }
 
@@ -193,6 +222,10 @@ export function normalizeRequest(input: Partial<RequestSpec> | null | undefined)
     },
     auth: input.auth?.type ? input.auth : { type: 'none' },
     params: Array.isArray(input.params) ? input.params : [],
+    scripts: {
+      before: typeof input.scripts?.before === 'string' ? input.scripts.before : '',
+      after: typeof input.scripts?.after === 'string' ? input.scripts.after : '',
+    },
   };
 }
 
