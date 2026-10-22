@@ -162,7 +162,12 @@ async fn execute(input: SendRequestInput) -> Result<HttpResponse, String> {
     let headers: Vec<(String, String)> = response
         .headers()
         .iter()
-        .map(|(k, v)| (k.to_string(), String::from_utf8_lossy(v.as_bytes()).into_owned()))
+        .map(|(k, v)| {
+            (
+                k.to_string(),
+                String::from_utf8_lossy(v.as_bytes()).into_owned(),
+            )
+        })
         .collect();
     let content_type = response
         .headers()
@@ -307,7 +312,10 @@ mod tests {
         assert_eq!(response.status, 201);
         assert_eq!(response.body.as_deref(), Some(r#"{"ok":true}"#));
         assert_eq!(response.content_type.as_deref(), Some("application/json"));
-        assert!(response.headers.iter().any(|(k, v)| k == "x-test" && v == "yes"));
+        assert!(response
+            .headers
+            .iter()
+            .any(|(k, v)| k == "x-test" && v == "yes"));
 
         let raw = server.await.unwrap();
         assert!(raw.starts_with("POST /contacts?x=1 HTTP/1.1"));
@@ -388,8 +396,15 @@ mod tests {
             .tls_built_in_native_certs(false)
             .build()
             .unwrap();
-        match client.get("https://jsonplaceholder.typicode.com/posts/1").send().await {
-            Ok(r) => println!("bundled roots only: OK ({}), traffic is not intercepted", r.status()),
+        match client
+            .get("https://jsonplaceholder.typicode.com/posts/1")
+            .send()
+            .await
+        {
+            Ok(r) => println!(
+                "bundled roots only: OK ({}), traffic is not intercepted",
+                r.status()
+            ),
             Err(e) => println!("bundled roots only: FAILED: {}", describe_error(e)),
         }
     }

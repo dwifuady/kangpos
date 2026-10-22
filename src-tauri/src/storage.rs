@@ -193,12 +193,21 @@ fn trim_response(mut stored: Value) -> Value {
     stored
 }
 
-fn add_column_if_missing(conn: &Connection, table: &str, column: &str, sql_type: &str) -> StorageResult<()> {
+fn add_column_if_missing(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    sql_type: &str,
+) -> StorageResult<()> {
     let exists = conn
-        .prepare(&format!("SELECT 1 FROM pragma_table_info('{table}') WHERE name = ?1"))?
+        .prepare(&format!(
+            "SELECT 1 FROM pragma_table_info('{table}') WHERE name = ?1"
+        ))?
         .exists([column])?;
     if !exists {
-        conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {sql_type}"))?;
+        conn.execute_batch(&format!(
+            "ALTER TABLE {table} ADD COLUMN {column} {sql_type}"
+        ))?;
     }
     Ok(())
 }
@@ -364,10 +373,16 @@ impl DatabaseManager {
         {
             let conn = self.connection.lock();
             if let Some(name) = &input.name {
-                conn.execute("UPDATE spaces SET name = ?1 WHERE id = ?2", params![name, id])?;
+                conn.execute(
+                    "UPDATE spaces SET name = ?1 WHERE id = ?2",
+                    params![name, id],
+                )?;
             }
             if let Some(color) = &input.color {
-                conn.execute("UPDATE spaces SET color = ?1 WHERE id = ?2", params![color, id])?;
+                conn.execute(
+                    "UPDATE spaces SET color = ?1 WHERE id = ?2",
+                    params![color, id],
+                )?;
             }
             if let Some(env) = &input.active_environment_id {
                 conn.execute(
@@ -518,7 +533,10 @@ impl DatabaseManager {
     }
 
     /// Insert several templates in one transaction (used by imports).
-    pub fn create_templates(&self, inputs: Vec<CreateTemplateInput>) -> StorageResult<Vec<Template>> {
+    pub fn create_templates(
+        &self,
+        inputs: Vec<CreateTemplateInput>,
+    ) -> StorageResult<Vec<Template>> {
         let mut ids = Vec::with_capacity(inputs.len());
         {
             let mut conn = self.connection.lock();
@@ -547,7 +565,10 @@ impl DatabaseManager {
         {
             let conn = self.connection.lock();
             if let Some(name) = &input.name {
-                conn.execute("UPDATE templates SET name = ?1 WHERE id = ?2", params![name, id])?;
+                conn.execute(
+                    "UPDATE templates SET name = ?1 WHERE id = ?2",
+                    params![name, id],
+                )?;
             }
             if let Some(folder) = &input.folder {
                 conn.execute(
@@ -642,13 +663,22 @@ impl DatabaseManager {
         {
             let conn = self.connection.lock();
             if let Some(v) = &input.template_id {
-                conn.execute("UPDATE tabs SET template_id = ?1 WHERE id = ?2", params![v, id])?;
+                conn.execute(
+                    "UPDATE tabs SET template_id = ?1 WHERE id = ?2",
+                    params![v, id],
+                )?;
             }
             if let Some(v) = &input.template_name {
-                conn.execute("UPDATE tabs SET template_name = ?1 WHERE id = ?2", params![v, id])?;
+                conn.execute(
+                    "UPDATE tabs SET template_name = ?1 WHERE id = ?2",
+                    params![v, id],
+                )?;
             }
             if let Some(v) = &input.custom_title {
-                conn.execute("UPDATE tabs SET custom_title = ?1 WHERE id = ?2", params![v, id])?;
+                conn.execute(
+                    "UPDATE tabs SET custom_title = ?1 WHERE id = ?2",
+                    params![v, id],
+                )?;
             }
             if let Some(v) = &input.request {
                 conn.execute(
@@ -666,7 +696,10 @@ impl DatabaseManager {
                 let text = v
                     .map(|r| serde_json::to_string(&trim_response(r)))
                     .transpose()?;
-                conn.execute("UPDATE tabs SET response = ?1 WHERE id = ?2", params![text, id])?;
+                conn.execute(
+                    "UPDATE tabs SET response = ?1 WHERE id = ?2",
+                    params![text, id],
+                )?;
             }
             if let Some(v) = input.is_pinned {
                 conn.execute(
@@ -786,8 +819,7 @@ mod tests {
         assert!(tab3.is_pinned);
 
         // Explicit null: title cleared.
-        let input: UpdateTabInput =
-            serde_json::from_value(json!({"custom_title": null})).unwrap();
+        let input: UpdateTabInput = serde_json::from_value(json!({"custom_title": null})).unwrap();
         let tab4 = db.update_tab(&tab.id, input).unwrap();
         assert_eq!(tab4.custom_title, None);
     }
@@ -795,8 +827,12 @@ mod tests {
     #[test]
     fn large_response_body_is_trimmed() {
         let big = "x".repeat(MAX_STORED_BODY + 10);
-        let trimmed = trim_response(json!({"sentAt": "t", "response": {"status": 200, "bodyBase64": big}}));
-        assert_eq!(trimmed["response"]["bodyBase64"].as_str().unwrap().len(), MAX_STORED_BODY);
+        let trimmed =
+            trim_response(json!({"sentAt": "t", "response": {"status": 200, "bodyBase64": big}}));
+        assert_eq!(
+            trimmed["response"]["bodyBase64"].as_str().unwrap().len(),
+            MAX_STORED_BODY
+        );
         assert_eq!(trimmed["truncated"], true);
 
         let small = trim_response(json!({"response": {"body": "ok"}}));
@@ -808,9 +844,7 @@ mod tests {
     fn deleting_environment_clears_active_reference() {
         let db = DatabaseManager::in_memory().unwrap();
         let space = db.create_space("Work", None).unwrap();
-        let env = db
-            .create_environment(&space.id, "Dev", &json!([]))
-            .unwrap();
+        let env = db.create_environment(&space.id, "Dev", &json!([])).unwrap();
         db.update_space(
             &space.id,
             UpdateSpaceInput {

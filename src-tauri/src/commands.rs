@@ -55,7 +55,9 @@ type ApiResult<T> = Result<T, ApiError>;
 
 /// Report a folder write failure without losing the database change.
 fn file_error(e: SyncError) -> ApiError {
-    ApiError::Sync(format!("Saved, but the workspace folder could not be updated: {e}"))
+    ApiError::Sync(format!(
+        "Saved, but the workspace folder could not be updated: {e}"
+    ))
 }
 
 // ---- Spaces ----
@@ -109,7 +111,9 @@ pub async fn link_space_folder(
     space_id: String,
     path: String,
 ) -> ApiResult<Space> {
-    let space = state.sync.exclusive(|| sync::link(&state.db, &space_id, &path))?;
+    let space = state
+        .sync
+        .exclusive(|| sync::link(&state.db, &space_id, &path))?;
     state.sync.start(&space_id)?;
     Ok(space)
 }
@@ -118,13 +122,17 @@ pub async fn link_space_folder(
 #[tauri::command]
 pub async fn unlink_space_folder(state: State<'_, AppState>, space_id: String) -> ApiResult<Space> {
     state.sync.stop(&space_id);
-    Ok(state.sync.exclusive(|| sync::unlink(&state.db, &space_id))?)
+    Ok(state
+        .sync
+        .exclusive(|| sync::unlink(&state.db, &space_id))?)
 }
 
 /// Add a folder that already holds a KangPos workspace (e.g. a git clone) as a new space.
 #[tauri::command]
 pub async fn open_workspace_folder(state: State<'_, AppState>, path: String) -> ApiResult<Space> {
-    let (space, _) = state.sync.exclusive(|| sync::open_workspace(&state.db, &path))?;
+    let (space, _) = state
+        .sync
+        .exclusive(|| sync::open_workspace(&state.db, &path))?;
     state.sync.start(&space.id)?;
     Ok(space)
 }
@@ -333,14 +341,15 @@ pub async fn save_response_file(path: String, base64: String) -> ApiResult<()> {
     let lower = path.to_string_lossy().to_lowercase();
     for forbidden in [r"c:\windows", r"c:\program files"] {
         if lower.starts_with(forbidden) {
-            return Err(ApiError::Validation("Cannot write to a system folder".into()));
+            return Err(ApiError::Validation(
+                "Cannot write to a system folder".into(),
+            ));
         }
     }
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(base64.as_bytes())
         .map_err(|e| ApiError::Validation(format!("Invalid response data: {e}")))?;
-    std::fs::write(&path, bytes)
-        .map_err(|e| ApiError::Storage(format!("Cannot save file: {e}")))
+    std::fs::write(&path, bytes).map_err(|e| ApiError::Storage(format!("Cannot save file: {e}")))
 }
 
 #[cfg(test)]

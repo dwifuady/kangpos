@@ -70,16 +70,56 @@ struct SyncEvent {
 
 /// Keys in the order they are written; anything else follows alphabetically.
 const KEY_ORDER: &[&str] = &[
-    "kangpos", "id", "name", "color", "method", "url", "params", "query", "headers", "body", "auth",
-    "scripts", "before", "after",
-    "variables", "type", "key", "value", "enabled", "secret", "kind", "default", "required", "options",
-    "description", "raw", "fields", "token", "username", "password", "in",
+    "kangpos",
+    "id",
+    "name",
+    "color",
+    "method",
+    "url",
+    "params",
+    "query",
+    "headers",
+    "body",
+    "auth",
+    "scripts",
+    "before",
+    "after",
+    "variables",
+    "type",
+    "key",
+    "value",
+    "enabled",
+    "secret",
+    "kind",
+    "default",
+    "required",
+    "options",
+    "description",
+    "raw",
+    "fields",
+    "token",
+    "username",
+    "password",
+    "in",
 ];
 
 /// Fields that are always strings in KangPos, even if YAML parsed `123` or `true`.
 const STRING_KEYS: &[&str] = &[
-    "id", "name", "method", "url", "key", "value", "default", "description", "raw", "token",
-    "username", "password", "in", "type", "kind",
+    "id",
+    "name",
+    "method",
+    "url",
+    "key",
+    "value",
+    "default",
+    "description",
+    "raw",
+    "token",
+    "username",
+    "password",
+    "in",
+    "type",
+    "kind",
 ];
 
 /// Drop values that only add noise to diffs: nulls, empty lists, empty
@@ -93,10 +133,14 @@ fn clean(value: &Value) -> Value {
                 if v.is_null() || matches!(v, Value::Array(a) if a.is_empty()) {
                     continue;
                 }
-                if matches!(k.as_str(), "raw" | "description" | "before" | "after") && v.as_str().is_some_and(|t| t.trim().is_empty()) {
+                if matches!(k.as_str(), "raw" | "description" | "before" | "after")
+                    && v.as_str().is_some_and(|t| t.trim().is_empty())
+                {
                     continue;
                 }
-                if (k == "body" || k == "auth") && v.get("type").and_then(Value::as_str) == Some("none") {
+                if (k == "body" || k == "auth")
+                    && v.get("type").and_then(Value::as_str) == Some("none")
+                {
                     continue;
                 }
                 let cleaned = clean(v);
@@ -130,7 +174,10 @@ fn coerce_strings(value: &mut Value) {
 }
 
 fn key_rank(key: &str) -> (usize, String) {
-    let rank = KEY_ORDER.iter().position(|k| *k == key).unwrap_or(KEY_ORDER.len());
+    let rank = KEY_ORDER
+        .iter()
+        .position(|k| *k == key)
+        .unwrap_or(KEY_ORDER.len());
     (rank, key.to_string())
 }
 
@@ -229,7 +276,13 @@ pub fn slug(name: &str) -> String {
 fn folder_segment(segment: &str) -> String {
     let cleaned: String = segment
         .chars()
-        .map(|c| if "<>:\"/\\|?*".contains(c) || c.is_control() { '_' } else { c })
+        .map(|c| {
+            if "<>:\"/\\|?*".contains(c) || c.is_control() {
+                '_'
+            } else {
+                c
+            }
+        })
         .collect();
     let cleaned = cleaned.trim().trim_end_matches('.').trim().to_string();
     if cleaned.is_empty() || cleaned.starts_with('.') || cleaned == ENV_DIR {
@@ -271,9 +324,19 @@ fn rel_string(path: &Path) -> String {
 }
 
 /// Pick `<stem>.yaml`, or `<stem>-2.yaml`, ... if another item already uses that name.
-fn unique_path(dir: &Path, base: &Path, stem: &str, taken: &HashSet<String>, own: Option<&str>) -> String {
+fn unique_path(
+    dir: &Path,
+    base: &Path,
+    stem: &str,
+    taken: &HashSet<String>,
+    own: Option<&str>,
+) -> String {
     for n in 1.. {
-        let file = if n == 1 { format!("{stem}.yaml") } else { format!("{stem}-{n}.yaml") };
+        let file = if n == 1 {
+            format!("{stem}.yaml")
+        } else {
+            format!("{stem}-{n}.yaml")
+        };
         let rel = rel_string(&base.join(&file));
         if own == Some(rel.as_str()) {
             return rel;
@@ -287,7 +350,9 @@ fn unique_path(dir: &Path, base: &Path, stem: &str, taken: &HashSet<String>, own
 
 /// `get-contact.yaml` or a numbered twin like `get-contact-2.yaml`.
 fn stem_matches(rel: &str, stem: &str) -> bool {
-    let Some(file_stem) = Path::new(rel).file_stem().and_then(|s| s.to_str()) else { return false };
+    let Some(file_stem) = Path::new(rel).file_stem().and_then(|s| s.to_str()) else {
+        return false;
+    };
     file_stem == stem
         || file_stem
             .strip_prefix(stem)
@@ -342,7 +407,12 @@ pub fn write_workspace_file(dir: &Path, space: &Space) -> SyncResult<()> {
     write_atomic(&dir.join(WORKSPACE_FILE), &render(&Value::Object(doc))?)
 }
 
-fn taken_paths(db: &DatabaseManager, table: &str, space_id: &str, except_id: &str) -> SyncResult<HashSet<String>> {
+fn taken_paths(
+    db: &DatabaseManager,
+    table: &str,
+    space_id: &str,
+    except_id: &str,
+) -> SyncResult<HashSet<String>> {
     let conn = db.conn();
     let mut stmt = conn.prepare(&format!(
         "SELECT file_path FROM {table} WHERE space_id = ?1 AND id != ?2 AND file_path IS NOT NULL"
@@ -354,33 +424,55 @@ fn taken_paths(db: &DatabaseManager, table: &str, space_id: &str, except_id: &st
 fn current_file_path(db: &DatabaseManager, table: &str, id: &str) -> SyncResult<Option<String>> {
     let conn = db.conn();
     Ok(conn
-        .query_row(&format!("SELECT file_path FROM {table} WHERE id = ?1"), [id], |r| r.get::<_, Option<String>>(0))
+        .query_row(
+            &format!("SELECT file_path FROM {table} WHERE id = ?1"),
+            [id],
+            |r| r.get::<_, Option<String>>(0),
+        )
         .optional()?
         .flatten())
 }
 
 fn set_file_path(db: &DatabaseManager, table: &str, id: &str, rel: Option<&str>) -> SyncResult<()> {
-    db.conn()
-        .execute(&format!("UPDATE {table} SET file_path = ?1 WHERE id = ?2"), params![rel, id])?;
+    db.conn().execute(
+        &format!("UPDATE {table} SET file_path = ?1 WHERE id = ?2"),
+        params![rel, id],
+    )?;
     Ok(())
 }
 
 /// Write one template to its file, moving the file if its name or folder changed.
 pub fn write_template(db: &DatabaseManager, id: &str) -> SyncResult<()> {
     let tpl = db.get_template(id)?;
-    let Some(dir) = space_dir(db, &tpl.space_id)? else { return Ok(()) };
+    let Some(dir) = space_dir(db, &tpl.space_id)? else {
+        return Ok(());
+    };
     let old = current_file_path(db, "templates", id)?;
     let base: PathBuf = folder_dirs(&tpl.folder).iter().collect();
     let stem = slug(&tpl.name);
     // Keep the current file if it already sits at the right place.
     let keep = old.as_deref().filter(|rel| {
-        Path::new(rel).parent().map(Path::to_path_buf).unwrap_or_default() == base && stem_matches(rel, &stem)
+        Path::new(rel)
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_default()
+            == base
+            && stem_matches(rel, &stem)
     });
     let rel = match keep {
         Some(rel) => rel.to_string(),
-        None => unique_path(&dir, &base, &stem, &taken_paths(db, "templates", &tpl.space_id, id)?, None),
+        None => unique_path(
+            &dir,
+            &base,
+            &stem,
+            &taken_paths(db, "templates", &tpl.space_id, id)?,
+            None,
+        ),
     };
-    write_atomic(&dir.join(&rel), &render(&template_document(&tpl.id, &tpl.name, &tpl.request))?)?;
+    write_atomic(
+        &dir.join(&rel),
+        &render(&template_document(&tpl.id, &tpl.name, &tpl.request))?,
+    )?;
     if let Some(old) = old.filter(|o| *o != rel) {
         remove_file(&dir, &old);
     }
@@ -389,8 +481,13 @@ pub fn write_template(db: &DatabaseManager, id: &str) -> SyncResult<()> {
 
 /// Remove a template's file (call before deleting the row).
 pub fn remove_template(db: &DatabaseManager, id: &str) -> SyncResult<()> {
-    let Ok(tpl) = db.get_template(id) else { return Ok(()) };
-    if let (Some(dir), Some(rel)) = (space_dir(db, &tpl.space_id)?, current_file_path(db, "templates", id)?) {
+    let Ok(tpl) = db.get_template(id) else {
+        return Ok(());
+    };
+    if let (Some(dir), Some(rel)) = (
+        space_dir(db, &tpl.space_id)?,
+        current_file_path(db, "templates", id)?,
+    ) {
         remove_file(&dir, &rel);
     }
     Ok(())
@@ -398,16 +495,27 @@ pub fn remove_template(db: &DatabaseManager, id: &str) -> SyncResult<()> {
 
 pub fn write_environment(db: &DatabaseManager, id: &str) -> SyncResult<()> {
     let env = db.get_environment(id)?;
-    let Some(dir) = space_dir(db, &env.space_id)? else { return Ok(()) };
+    let Some(dir) = space_dir(db, &env.space_id)? else {
+        return Ok(());
+    };
     let old = current_file_path(db, "environments", id)?;
     let base = PathBuf::from(ENV_DIR);
     let stem = slug(&env.name);
     let keep = old.as_deref().filter(|rel| stem_matches(rel, &stem));
     let rel = match keep {
         Some(rel) => rel.to_string(),
-        None => unique_path(&dir, &base, &stem, &taken_paths(db, "environments", &env.space_id, id)?, None),
+        None => unique_path(
+            &dir,
+            &base,
+            &stem,
+            &taken_paths(db, "environments", &env.space_id, id)?,
+            None,
+        ),
     };
-    write_atomic(&dir.join(&rel), &render(&environment_document(&env.id, &env.name, &env.variables))?)?;
+    write_atomic(
+        &dir.join(&rel),
+        &render(&environment_document(&env.id, &env.name, &env.variables))?,
+    )?;
     if let Some(old) = old.filter(|o| *o != rel) {
         remove_file(&dir, &old);
     }
@@ -415,8 +523,13 @@ pub fn write_environment(db: &DatabaseManager, id: &str) -> SyncResult<()> {
 }
 
 pub fn remove_environment(db: &DatabaseManager, id: &str) -> SyncResult<()> {
-    let Ok(env) = db.get_environment(id) else { return Ok(()) };
-    if let (Some(dir), Some(rel)) = (space_dir(db, &env.space_id)?, current_file_path(db, "environments", id)?) {
+    let Ok(env) = db.get_environment(id) else {
+        return Ok(());
+    };
+    if let (Some(dir), Some(rel)) = (
+        space_dir(db, &env.space_id)?,
+        current_file_path(db, "environments", id)?,
+    ) {
         remove_file(&dir, &rel);
     }
     Ok(())
@@ -433,14 +546,27 @@ struct Scan {
 }
 
 fn is_yaml(path: &Path) -> bool {
-    matches!(path.extension().and_then(|e| e.to_str()).map(str::to_lowercase).as_deref(), Some("yaml" | "yml"))
+    matches!(
+        path.extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_lowercase)
+            .as_deref(),
+        Some("yaml" | "yml")
+    )
 }
 
 fn scan(dir: &Path) -> Scan {
-    let mut out = Scan { templates: vec![], environments: vec![], workspace: None, errors: vec![] };
+    let mut out = Scan {
+        templates: vec![],
+        environments: vec![],
+        workspace: None,
+        errors: vec![],
+    };
     let mut stack = vec![dir.to_path_buf()];
     while let Some(current) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&current) else { continue };
+        let Ok(entries) = std::fs::read_dir(&current) else {
+            continue;
+        };
         let mut entries: Vec<_> = entries.flatten().collect();
         entries.sort_by_key(|e| e.file_name());
         for entry in entries {
@@ -457,11 +583,15 @@ fn scan(dir: &Path) -> Scan {
                 continue;
             }
             let rel = rel_string(path.strip_prefix(dir).unwrap_or(&path));
-            let parsed = std::fs::read_to_string(&path).map_err(|e| e.to_string()).and_then(|t| parse_yaml(&t));
+            let parsed = std::fs::read_to_string(&path)
+                .map_err(|e| e.to_string())
+                .and_then(|t| parse_yaml(&t));
             match parsed {
                 Err(message) => out.errors.push(FileError { path: rel, message }),
                 Ok(doc) if rel == WORKSPACE_FILE => out.workspace = Some(doc),
-                Ok(doc) if rel.starts_with(&format!("{ENV_DIR}/")) => out.environments.push((rel, doc)),
+                Ok(doc) if rel.starts_with(&format!("{ENV_DIR}/")) => {
+                    out.environments.push((rel, doc))
+                }
                 Ok(doc) => out.templates.push((rel, doc)),
             }
         }
@@ -475,12 +605,19 @@ fn folder_of(rel: &str) -> String {
 }
 
 fn name_from_file(rel: &str) -> String {
-    Path::new(rel).file_stem().map(|s| s.to_string_lossy().replace('-', " ")).unwrap_or_else(|| "Untitled".into())
+    Path::new(rel)
+        .file_stem()
+        .map(|s| s.to_string_lossy().replace('-', " "))
+        .unwrap_or_else(|| "Untitled".into())
 }
 
 /// Give a hand-written file without an `id` one, and write it back.
 fn ensure_id(dir: &Path, rel: &str, doc: &mut Map<String, Value>) -> String {
-    if let Some(id) = doc.get("id").and_then(Value::as_str).filter(|s| !s.trim().is_empty()) {
+    if let Some(id) = doc
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+    {
         return id.to_string();
     }
     let id = uuid::Uuid::new_v4().to_string();
@@ -499,7 +636,12 @@ pub fn load_from_disk(db: &DatabaseManager, space_id: &str) -> SyncResult<(bool,
         return Err(SyncError::Invalid("Space is not linked to a folder".into()));
     };
     let dir = PathBuf::from(&dir_str);
-    let mut status = SyncStatus { space_id: space_id.into(), dir: dir_str, missing: false, errors: vec![] };
+    let mut status = SyncStatus {
+        space_id: space_id.into(),
+        dir: dir_str,
+        missing: false,
+        errors: vec![],
+    };
     if !dir.is_dir() {
         status.missing = true;
         return Ok((false, status));
@@ -515,11 +657,17 @@ pub fn load_from_disk(db: &DatabaseManager, space_id: &str) -> SyncResult<(bool,
         let color = ws.get("color").and_then(Value::as_str).map(str::to_string);
         let conn = db.conn();
         if let Some(name) = name.filter(|n| !n.trim().is_empty() && *n != space.name) {
-            conn.execute("UPDATE spaces SET name = ?1 WHERE id = ?2", params![name, space_id])?;
+            conn.execute(
+                "UPDATE spaces SET name = ?1 WHERE id = ?2",
+                params![name, space_id],
+            )?;
             changed = true;
         }
         if color.is_some() && color != space.color {
-            conn.execute("UPDATE spaces SET color = ?1 WHERE id = ?2", params![color, space_id])?;
+            conn.execute(
+                "UPDATE spaces SET color = ?1 WHERE id = ?2",
+                params![color, space_id],
+            )?;
             changed = true;
         }
     }
@@ -532,13 +680,18 @@ pub fn load_from_disk(db: &DatabaseManager, space_id: &str) -> SyncResult<(bool,
             status.errors.push(FileError { path: rel.clone(), message: format!("Duplicate id {id} (another file already uses it); give this file a new id or delete the line") });
             continue;
         }
-        let name = doc.get("name").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| name_from_file(rel));
+        let name = doc
+            .get("name")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| name_from_file(rel));
         let mut request = doc.clone();
         request.remove("id");
         request.remove("name");
         let request = clean(&Value::Object(request));
         let folder = folder_of(rel);
-        let request_text = serde_json::to_string(&request).map_err(|e| SyncError::Invalid(e.to_string()))?;
+        let request_text =
+            serde_json::to_string(&request).map_err(|e| SyncError::Invalid(e.to_string()))?;
 
         let conn = db.conn();
         let existing: Option<(String, String, String, String, Option<String>)> = conn
@@ -550,12 +703,19 @@ pub fn load_from_disk(db: &DatabaseManager, space_id: &str) -> SyncResult<(bool,
             .optional()?;
         match existing {
             Some((other, ..)) if other != space_id => {
-                status.errors.push(FileError { path: rel.clone(), message: format!("id {id} belongs to a template in another space") });
+                status.errors.push(FileError {
+                    path: rel.clone(),
+                    message: format!("id {id} belongs to a template in another space"),
+                });
                 seen.remove(&id);
             }
             Some((_, old_name, old_folder, old_request, old_path)) => {
                 let old_clean = clean(&serde_json::from_str(&old_request).unwrap_or(Value::Null));
-                if old_name != name || old_folder != folder || old_clean != request || old_path.as_deref() != Some(rel.as_str()) {
+                if old_name != name
+                    || old_folder != folder
+                    || old_clean != request
+                    || old_path.as_deref() != Some(rel.as_str())
+                {
                     conn.execute(
                         "UPDATE templates SET name = ?1, folder = ?2, request = ?3, file_path = ?4, updated_at = datetime('now') WHERE id = ?5",
                         params![name, folder, request_text, rel.as_str(), id],
@@ -579,10 +739,17 @@ pub fn load_from_disk(db: &DatabaseManager, space_id: &str) -> SyncResult<(bool,
     for (rel, doc) in found.environments.iter_mut() {
         let id = ensure_id(&dir, rel, doc);
         if !seen.insert(id.clone()) {
-            status.errors.push(FileError { path: rel.clone(), message: format!("Duplicate id {id}") });
+            status.errors.push(FileError {
+                path: rel.clone(),
+                message: format!("Duplicate id {id}"),
+            });
             continue;
         }
-        let name = doc.get("name").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| name_from_file(rel));
+        let name = doc
+            .get("name")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| name_from_file(rel));
         let conn = db.conn();
         let existing: Option<(String, String, String, Option<String>)> = conn
             .query_row(
@@ -593,7 +760,10 @@ pub fn load_from_disk(db: &DatabaseManager, space_id: &str) -> SyncResult<(bool,
             .optional()?;
         if let Some((other, ..)) = &existing {
             if other != space_id {
-                status.errors.push(FileError { path: rel.clone(), message: format!("id {id} belongs to an environment in another space") });
+                status.errors.push(FileError {
+                    path: rel.clone(),
+                    message: format!("id {id} belongs to an environment in another space"),
+                });
                 seen.remove(&id);
                 continue;
             }
@@ -604,7 +774,12 @@ pub fn load_from_disk(db: &DatabaseManager, space_id: &str) -> SyncResult<(bool,
             .and_then(|v| v.as_array().cloned())
             .unwrap_or_default()
             .into_iter()
-            .filter_map(|v| Some((v.get("key")?.as_str()?.to_string(), v.get("value")?.as_str()?.to_string())))
+            .filter_map(|v| {
+                Some((
+                    v.get("key")?.as_str()?.to_string(),
+                    v.get("value")?.as_str()?.to_string(),
+                ))
+            })
             .collect();
         let variables: Vec<Value> = doc
             .get("variables")
@@ -616,7 +791,12 @@ pub fn load_from_disk(db: &DatabaseManager, space_id: &str) -> SyncResult<(bool,
                 let mut var = v.as_object()?.clone();
                 let key = var.get("key")?.as_str()?.to_string();
                 var.entry("enabled").or_insert(Value::Bool(true));
-                if var.get("value").and_then(Value::as_str).unwrap_or("").is_empty() {
+                if var
+                    .get("value")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .is_empty()
+                {
                     let fallback = if var.get("secret").and_then(Value::as_bool) == Some(true) {
                         local.get(&key).cloned().unwrap_or_default()
                     } else {
@@ -628,11 +808,15 @@ pub fn load_from_disk(db: &DatabaseManager, space_id: &str) -> SyncResult<(bool,
             })
             .collect();
         let vars_value = Value::Array(variables);
-        let vars_text = serde_json::to_string(&vars_value).map_err(|e| SyncError::Invalid(e.to_string()))?;
+        let vars_text =
+            serde_json::to_string(&vars_value).map_err(|e| SyncError::Invalid(e.to_string()))?;
         match existing {
             Some((_, old_name, old_vars, old_path)) => {
                 let old_value: Value = serde_json::from_str(&old_vars).unwrap_or(Value::Null);
-                if old_name != name || clean(&old_value) != clean(&vars_value) || old_path.as_deref() != Some(rel.as_str()) {
+                if old_name != name
+                    || clean(&old_value) != clean(&vars_value)
+                    || old_path.as_deref() != Some(rel.as_str())
+                {
                     conn.execute(
                         "UPDATE environments SET name = ?1, variables = ?2, file_path = ?3, updated_at = datetime('now') WHERE id = ?4",
                         params![name, vars_text, rel.as_str(), id],
@@ -657,10 +841,18 @@ pub fn load_from_disk(db: &DatabaseManager, space_id: &str) -> SyncResult<(bool,
 }
 
 /// Delete rows whose file is gone (but not rows whose file only failed to parse).
-fn delete_missing(db: &DatabaseManager, table: &str, space_id: &str, seen: &HashSet<String>, errored: &HashSet<String>) -> SyncResult<bool> {
+fn delete_missing(
+    db: &DatabaseManager,
+    table: &str,
+    space_id: &str,
+    seen: &HashSet<String>,
+    errored: &HashSet<String>,
+) -> SyncResult<bool> {
     let conn = db.conn();
     let rows: Vec<(String, Option<String>)> = {
-        let mut stmt = conn.prepare(&format!("SELECT id, file_path FROM {table} WHERE space_id = ?1"))?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT id, file_path FROM {table} WHERE space_id = ?1"
+        ))?;
         let mapped = stmt.query_map([space_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
         mapped.collect::<Result<_, _>>()?
     };
@@ -690,7 +882,9 @@ fn canonical_dir(path: &str) -> SyncResult<PathBuf> {
     let canon = dunce_canonical(&path)?;
     let lower = canon.to_string_lossy().to_lowercase();
     if lower.starts_with(r"c:\windows") || lower.starts_with(r"c:\program files") {
-        return Err(SyncError::Invalid("Choose a folder outside the system folders".into()));
+        return Err(SyncError::Invalid(
+            "Choose a folder outside the system folders".into(),
+        ));
     }
     Ok(canon)
 }
@@ -705,13 +899,20 @@ fn dunce_canonical(path: &Path) -> std::io::Result<PathBuf> {
     })
 }
 
-fn ensure_not_linked_elsewhere(db: &DatabaseManager, dir: &Path, space_id: Option<&str>) -> SyncResult<()> {
+fn ensure_not_linked_elsewhere(
+    db: &DatabaseManager,
+    dir: &Path,
+    space_id: Option<&str>,
+) -> SyncResult<()> {
     for other in db.list_spaces()? {
         if Some(other.id.as_str()) == space_id {
             continue;
         }
         if other.sync_dir.as_deref().map(PathBuf::from).as_deref() == Some(dir) {
-            return Err(SyncError::Invalid(format!("This folder is already linked to the space \"{}\"", other.name)));
+            return Err(SyncError::Invalid(format!(
+                "This folder is already linked to the space \"{}\"",
+                other.name
+            )));
         }
     }
     Ok(())
@@ -729,9 +930,18 @@ pub fn link(db: &DatabaseManager, space_id: &str, path: &str) -> SyncResult<Spac
     let dir_text = dir.to_string_lossy().into_owned();
     {
         let conn = db.conn();
-        conn.execute("UPDATE spaces SET sync_dir = ?1 WHERE id = ?2", params![dir_text, space_id])?;
-        conn.execute("UPDATE templates SET file_path = NULL WHERE space_id = ?1", [space_id])?;
-        conn.execute("UPDATE environments SET file_path = NULL WHERE space_id = ?1", [space_id])?;
+        conn.execute(
+            "UPDATE spaces SET sync_dir = ?1 WHERE id = ?2",
+            params![dir_text, space_id],
+        )?;
+        conn.execute(
+            "UPDATE templates SET file_path = NULL WHERE space_id = ?1",
+            [space_id],
+        )?;
+        conn.execute(
+            "UPDATE environments SET file_path = NULL WHERE space_id = ?1",
+            [space_id],
+        )?;
     }
     let space = db.get_space(space_id)?;
     write_workspace_file(&dir, &space)?;
@@ -748,9 +958,18 @@ pub fn link(db: &DatabaseManager, space_id: &str, path: &str) -> SyncResult<Spac
 pub fn unlink(db: &DatabaseManager, space_id: &str) -> SyncResult<Space> {
     {
         let conn = db.conn();
-        conn.execute("UPDATE spaces SET sync_dir = NULL WHERE id = ?1", [space_id])?;
-        conn.execute("UPDATE templates SET file_path = NULL WHERE space_id = ?1", [space_id])?;
-        conn.execute("UPDATE environments SET file_path = NULL WHERE space_id = ?1", [space_id])?;
+        conn.execute(
+            "UPDATE spaces SET sync_dir = NULL WHERE id = ?1",
+            [space_id],
+        )?;
+        conn.execute(
+            "UPDATE templates SET file_path = NULL WHERE space_id = ?1",
+            [space_id],
+        )?;
+        conn.execute(
+            "UPDATE environments SET file_path = NULL WHERE space_id = ?1",
+            [space_id],
+        )?;
     }
     Ok(db.get_space(space_id)?)
 }
@@ -767,17 +986,25 @@ pub fn open_workspace(db: &DatabaseManager, path: &str) -> SyncResult<(Space, Sy
     ensure_not_linked_elsewhere(db, &dir, None)?;
     let doc = std::fs::read_to_string(&file)
         .map_err(SyncError::from)
-        .and_then(|t| parse_yaml(&t).map_err(|e| SyncError::Invalid(format!("kangpos.yaml: {e}"))))?;
+        .and_then(|t| {
+            parse_yaml(&t).map_err(|e| SyncError::Invalid(format!("kangpos.yaml: {e}")))
+        })?;
     if let Some(version) = doc.get("kangpos").and_then(Value::as_u64) {
         if version > FORMAT_VERSION {
-            return Err(SyncError::Invalid(format!("This workspace uses format {version}; update KangPos to open it")));
+            return Err(SyncError::Invalid(format!(
+                "This workspace uses format {version}; update KangPos to open it"
+            )));
         }
     }
     let name = doc
         .get("name")
         .and_then(Value::as_str)
         .map(str::to_string)
-        .unwrap_or_else(|| dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Workspace".into()));
+        .unwrap_or_else(|| {
+            dir.file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "Workspace".into())
+        });
     let color = doc.get("color").and_then(Value::as_str);
     let space = db.create_space(&name, color)?;
     db.conn().execute(
@@ -844,7 +1071,14 @@ impl SyncManager {
         // At startup this runs in the background, so tell the UI when it's done.
         let app = self.app.lock().clone();
         if let Some(app) = &app {
-            let _ = app.emit(SYNC_EVENT, SyncEvent { space_id: space_id.into(), changed, status: status.clone() });
+            let _ = app.emit(
+                SYNC_EVENT,
+                SyncEvent {
+                    space_id: space_id.into(),
+                    changed,
+                    status: status.clone(),
+                },
+            );
         }
         if status.missing {
             return Ok(status);
@@ -854,30 +1088,44 @@ impl SyncManager {
         let statuses = Arc::clone(&self.status);
         let lock = Arc::clone(&self.lock);
         let id = space_id.to_string();
-        let mut debouncer = new_debouncer(Duration::from_millis(400), move |res: DebounceEventResult| {
-            let Ok(events) = res else { return };
-            // Our own temp files and editors' swap files are noise.
-            if !events.iter().any(|e| is_yaml(&e.path) || e.path.is_dir() || !e.path.exists()) {
-                return;
-            }
-            let result = {
-                let _guard = lock.lock();
-                load_from_disk(&db, &id)
-            };
-            let (changed, status) = match result {
-                Ok(r) => r,
-                Err(e) => {
-                    eprintln!("[Sync] {id}: {e}");
+        let mut debouncer = new_debouncer(
+            Duration::from_millis(400),
+            move |res: DebounceEventResult| {
+                let Ok(events) = res else { return };
+                // Our own temp files and editors' swap files are noise.
+                if !events
+                    .iter()
+                    .any(|e| is_yaml(&e.path) || e.path.is_dir() || !e.path.exists())
+                {
                     return;
                 }
-            };
-            let status_changed = statuses.lock().insert(id.clone(), status.clone()).as_ref() != Some(&status);
-            if changed || status_changed {
-                if let Some(app) = &app {
-                    let _ = app.emit(SYNC_EVENT, SyncEvent { space_id: id.clone(), changed, status });
+                let result = {
+                    let _guard = lock.lock();
+                    load_from_disk(&db, &id)
+                };
+                let (changed, status) = match result {
+                    Ok(r) => r,
+                    Err(e) => {
+                        eprintln!("[Sync] {id}: {e}");
+                        return;
+                    }
+                };
+                let status_changed =
+                    statuses.lock().insert(id.clone(), status.clone()).as_ref() != Some(&status);
+                if changed || status_changed {
+                    if let Some(app) = &app {
+                        let _ = app.emit(
+                            SYNC_EVENT,
+                            SyncEvent {
+                                space_id: id.clone(),
+                                changed,
+                                status,
+                            },
+                        );
+                    }
                 }
-            }
-        })
+            },
+        )
         .map_err(|e| SyncError::Invalid(format!("Cannot watch folder: {e}")))?;
         debouncer
             .watcher()
@@ -894,7 +1142,9 @@ impl SyncManager {
 
     /// Start every linked space (app startup).
     pub fn start_all(&self) {
-        let Ok(spaces) = self.db.list_spaces() else { return };
+        let Ok(spaces) = self.db.list_spaces() else {
+            return;
+        };
         for space in spaces.into_iter().filter(|s| s.sync_dir.is_some()) {
             if let Err(e) = self.start(&space.id) {
                 eprintln!("[Sync] could not start {}: {e}", space.name);
@@ -947,10 +1197,14 @@ mod tests {
         let (db, space, dir) = setup();
         add_template(&db, &space.id, "Get contact", "Contacts / Admin");
         let env = db
-            .create_environment(&space.id, "Dev", &json!([
-                {"key": "baseUrl", "value": "https://dev.test", "enabled": true},
-                {"key": "token", "value": "s3cret", "enabled": true, "secret": true}
-            ]))
+            .create_environment(
+                &space.id,
+                "Dev",
+                &json!([
+                    {"key": "baseUrl", "value": "https://dev.test", "enabled": true},
+                    {"key": "token", "value": "s3cret", "enabled": true, "secret": true}
+                ]),
+            )
             .unwrap();
 
         link(&db, &space.id, dir.to_str().unwrap()).unwrap();
@@ -963,12 +1217,18 @@ mod tests {
         assert!(lines[0].starts_with("id: "));
         assert_eq!(lines[1], "name: Get contact");
         assert_eq!(lines[2], "method: GET");
-        assert!(!tpl.contains("body:") && !tpl.contains("auth:") && !tpl.contains("query:"), "{tpl}");
+        assert!(
+            !tpl.contains("body:") && !tpl.contains("auth:") && !tpl.contains("query:"),
+            "{tpl}"
+        );
 
         let env_file = std::fs::read_to_string(dir.join("environments/dev.yaml")).unwrap();
         assert!(env_file.contains("https://dev.test"));
         assert!(!env_file.contains("s3cret"), "secret leaked: {env_file}");
-        assert_eq!(db.get_environment(&env.id).unwrap().variables[1]["value"], "s3cret");
+        assert_eq!(
+            db.get_environment(&env.id).unwrap().variables[1]["value"],
+            "s3cret"
+        );
 
         // A fresh load finds nothing to change (no echo loop after our own writes).
         let (changed, status) = load_from_disk(&db, &space.id).unwrap();
@@ -983,7 +1243,15 @@ mod tests {
         let id = add_template(&db, &space.id, "Get contact", "Contacts");
         link(&db, &space.id, dir.to_str().unwrap()).unwrap();
 
-        db.update_template(&id, UpdateTemplateInput { name: Some("Fetch contact".into()), folder: Some("People".into()), request: None }).unwrap();
+        db.update_template(
+            &id,
+            UpdateTemplateInput {
+                name: Some("Fetch contact".into()),
+                folder: Some("People".into()),
+                request: None,
+            },
+        )
+        .unwrap();
         write_template(&db, &id).unwrap();
         assert!(dir.join("People/fetch-contact.yaml").exists());
         assert!(!dir.join("Contacts").exists(), "empty folder left behind");
@@ -1002,7 +1270,9 @@ mod tests {
 
         // Someone edits the URL in git.
         let path = dir.join("Contacts/get-contact.yaml");
-        let text = std::fs::read_to_string(&path).unwrap().replace("/contacts/", "/people/");
+        let text = std::fs::read_to_string(&path)
+            .unwrap()
+            .replace("/contacts/", "/people/");
         std::fs::write(&path, text).unwrap();
         // ...and adds a hand-written template without an id or name.
         std::fs::write(dir.join("Contacts/list-contacts.yaml"), "method: GET\nurl: '{{baseUrl}}/contacts'\nquery:\n  - key: page\n    value: 2\n    enabled: true\n").unwrap();
@@ -1017,21 +1287,40 @@ mod tests {
         let added = templates.iter().find(|t| t.id != id).unwrap();
         assert_eq!(added.name, "list contacts");
         assert_eq!(added.folder, "Contacts");
-        assert_eq!(added.request["query"][0]["value"], "2", "number coerced to string");
-        assert!(std::fs::read_to_string(dir.join("Contacts/list-contacts.yaml")).unwrap().starts_with("id: "));
+        assert_eq!(
+            added.request["query"][0]["value"], "2",
+            "number coerced to string"
+        );
+        assert!(
+            std::fs::read_to_string(dir.join("Contacts/list-contacts.yaml"))
+                .unwrap()
+                .starts_with("id: ")
+        );
 
         // A merge conflict makes the file unreadable: report it, keep the template.
-        std::fs::write(&path, "<<<<<<< HEAD\nmethod: GET\n=======\n: :\n>>>>>>> branch\n").unwrap();
+        std::fs::write(
+            &path,
+            "<<<<<<< HEAD\nmethod: GET\n=======\n: :\n>>>>>>> branch\n",
+        )
+        .unwrap();
         let (_, status) = load_from_disk(&db, &space.id).unwrap();
         assert_eq!(status.errors.len(), 1);
         assert_eq!(status.errors[0].path, "Contacts/get-contact.yaml");
-        assert!(db.list_templates(&space.id).unwrap().iter().any(|t| t.id == id));
+        assert!(db
+            .list_templates(&space.id)
+            .unwrap()
+            .iter()
+            .any(|t| t.id == id));
 
         // Deleting the file removes the template.
         std::fs::remove_file(&path).unwrap();
         let (changed, _) = load_from_disk(&db, &space.id).unwrap();
         assert!(changed);
-        assert!(!db.list_templates(&space.id).unwrap().iter().any(|t| t.id == id));
+        assert!(!db
+            .list_templates(&space.id)
+            .unwrap()
+            .iter()
+            .any(|t| t.id == id));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -1039,7 +1328,11 @@ mod tests {
     fn secrets_survive_a_reload_and_open_creates_a_space() {
         let (db, space, dir) = setup();
         let env = db
-            .create_environment(&space.id, "Dev", &json!([{"key": "token", "value": "s3cret", "enabled": true, "secret": true}]))
+            .create_environment(
+                &space.id,
+                "Dev",
+                &json!([{"key": "token", "value": "s3cret", "enabled": true, "secret": true}]),
+            )
             .unwrap();
         link(&db, &space.id, dir.to_str().unwrap()).unwrap();
 
@@ -1048,7 +1341,13 @@ mod tests {
         let text = std::fs::read_to_string(&path).unwrap();
         // Match the writer's list indentation.
         let indent = if text.contains("\n- key") { "" } else { "  " };
-        std::fs::write(&path, format!("{text}{indent}- key: tenant\n{indent}  value: acme\n{indent}  enabled: true\n")).unwrap();
+        std::fs::write(
+            &path,
+            format!(
+                "{text}{indent}- key: tenant\n{indent}  value: acme\n{indent}  enabled: true\n"
+            ),
+        )
+        .unwrap();
         load_from_disk(&db, &space.id).unwrap();
         let vars = db.get_environment(&env.id).unwrap().variables;
         assert_eq!(vars[0]["value"], "s3cret");
@@ -1076,7 +1375,10 @@ mod tests {
         assert_eq!(slug("  Create / Update: user!! "), "create-update-user");
         assert_eq!(slug("???"), "untitled");
         assert_eq!(slug("CON"), "con_");
-        assert_eq!(folder_dirs("Contacts / Admin: users / "), vec!["Contacts", "Admin_ users"]);
+        assert_eq!(
+            folder_dirs("Contacts / Admin: users / "),
+            vec!["Contacts", "Admin_ users"]
+        );
         assert_eq!(folder_dirs("environments"), vec!["_environments"]);
     }
 }
@@ -1106,7 +1408,10 @@ mod format_tests {
         // Numeric-looking strings stay strings when read back.
         let back = parse_yaml(&text).unwrap();
         assert_eq!(back["headers"][0]["value"], "123");
-        assert_eq!(back["body"]["raw"], "{\n  \"title\": \"{{title}}\",\n  \"userId\": 1\n}");
+        assert_eq!(
+            back["body"]["raw"],
+            "{\n  \"title\": \"{{title}}\",\n  \"userId\": 1\n}"
+        );
     }
 }
 
@@ -1145,27 +1450,44 @@ mod watcher_tests {
             .id;
         let dir = std::env::temp_dir().join(format!("kangpos-watch-{}", uuid::Uuid::new_v4()));
         let manager = SyncManager::new(Arc::clone(&db));
-        manager.exclusive(|| link(&db, &space.id, dir.to_str().unwrap())).unwrap();
+        manager
+            .exclusive(|| link(&db, &space.id, dir.to_str().unwrap()))
+            .unwrap();
         let canon = PathBuf::from(db.get_space(&space.id).unwrap().sync_dir.unwrap());
         let status = manager.start(&space.id).unwrap();
         assert!(status.errors.is_empty() && !status.missing);
 
         // Edit like git or VS Code would.
         let path = canon.join("get-contact.yaml");
-        let text = std::fs::read_to_string(&path).unwrap().replace("a.test", "b.test");
+        let text = std::fs::read_to_string(&path)
+            .unwrap()
+            .replace("a.test", "b.test");
         std::fs::write(&path, text).unwrap();
         assert!(
-            eventually(5, || db.get_template(&id).unwrap().request["url"] == "https://b.test/contacts"),
+            eventually(5, || db.get_template(&id).unwrap().request["url"]
+                == "https://b.test/contacts"),
             "edit was not loaded"
         );
 
         // A new file appears.
-        std::fs::write(canon.join("ping.yaml"), "name: Ping\nmethod: GET\nurl: https://b.test/ping\n").unwrap();
-        assert!(eventually(5, || db.list_templates(&space.id).unwrap().len() == 2), "new file was not loaded");
+        std::fs::write(
+            canon.join("ping.yaml"),
+            "name: Ping\nmethod: GET\nurl: https://b.test/ping\n",
+        )
+        .unwrap();
+        assert!(
+            eventually(5, || db.list_templates(&space.id).unwrap().len() == 2),
+            "new file was not loaded"
+        );
 
         // A broken file is reported in the status without losing the template.
         std::fs::write(&path, "method: [unclosed\n").unwrap();
-        assert!(eventually(5, || manager.status(&space.id).is_some_and(|s| s.errors.len() == 1)), "error not reported");
+        assert!(
+            eventually(5, || manager
+                .status(&space.id)
+                .is_some_and(|s| s.errors.len() == 1)),
+            "error not reported"
+        );
         assert!(db.get_template(&id).is_ok());
 
         manager.stop(&space.id);
@@ -1212,9 +1534,14 @@ mod script_file_tests {
         }))).unwrap();
         assert!(with.ends_with("scripts:\n  after: |-\n    pm.test('ok', () => {\n      pm.response.to.have.status(200);\n    });\n"), "{with}");
 
-        let without = render(&template_document("a", "Login", &json!({
-            "method": "GET", "url": "x", "scripts": {"before": "  ", "after": ""}
-        }))).unwrap();
+        let without = render(&template_document(
+            "a",
+            "Login",
+            &json!({
+                "method": "GET", "url": "x", "scripts": {"before": "  ", "after": ""}
+            }),
+        ))
+        .unwrap();
         assert!(!without.contains("scripts"), "{without}");
     }
 }
