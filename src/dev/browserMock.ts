@@ -3,6 +3,7 @@
 // HTTP requests go through fetch(), so they are subject to the browser's CORS rules.
 
 import { mockIPC, mockWindows } from '@tauri-apps/api/mocks';
+import { base64ToBytes, bytesToBase64 } from '../utils/binary';
 
 type Row = Record<string, unknown> & { id: string };
 
@@ -106,16 +107,22 @@ export function installBrowserMock(): void {
             body: input.body.type === 'raw' ? input.body.content : undefined,
             signal: controller.signal,
           });
-          const body = await res.text();
+          const bytes = new Uint8Array(await res.arrayBuffer());
+          let body: string | null = null;
+          try {
+            body = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+          } catch {
+            body = null; // not UTF-8: hand it back as base64, like the Rust side
+          }
           return {
             status: res.status,
             statusText: res.statusText,
             httpVersion: 'HTTP/1.1',
             headers: [...res.headers.entries()],
             body,
-            bodyBase64: null,
+            bodyBase64: body === null ? bytesToBase64(bytes) : null,
             contentType: res.headers.get('content-type'),
-            sizeBytes: new TextEncoder().encode(body).length,
+            sizeBytes: bytes.length,
             durationMs: Math.round(performance.now() - started),
             truncated: false,
             finalUrl: res.url,
@@ -126,6 +133,17 @@ export function installBrowserMock(): void {
           controllers.delete(input.requestId);
         }
       }
+      case 'save_response_file': {
+        // Browser preview: download instead of writing to the chosen path.
+        const name = String(args.path).split(/[\\/]/).pop() || 'response';
+        const url = URL.createObjectURL(new Blob([base64ToBytes(args.base64) as BlobPart]));
+        const a = Object.assign(document.createElement('a'), { href: url, download: name });
+        a.click();
+        URL.revokeObjectURL(url);
+        return null;
+      }
+      case 'plugin:dialog|save':
+        return args.options?.defaultPath ?? 'response';
       case 'read_import_file':
         throw { code: 'Validation', message: 'File access is not available in the browser preview; paste the content instead' };
       default:

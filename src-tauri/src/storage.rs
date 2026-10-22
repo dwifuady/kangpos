@@ -167,20 +167,28 @@ fn parse_json(text: String) -> Value {
 }
 
 /// Cut an oversized response body so one big download doesn't bloat the database.
-fn trim_response(mut response: Value) -> Value {
-    for field in ["body", "bodyBase64"] {
-        if let Some(Value::String(body)) = response.get_mut(field) {
-            if body.len() > MAX_STORED_BODY {
-                let mut cut = MAX_STORED_BODY;
-                while !body.is_char_boundary(cut) {
-                    cut -= 1;
+/// `stored` is the frontend's StoredResponse (`{ response: { body, bodyBase64, .. }, .. }`);
+/// a cut body is flagged with `truncated: true` at the top level.
+fn trim_response(mut stored: Value) -> Value {
+    let mut cut_any = false;
+    if let Some(inner) = stored.get_mut("response") {
+        for field in ["body", "bodyBase64"] {
+            if let Some(Value::String(body)) = inner.get_mut(field) {
+                if body.len() > MAX_STORED_BODY {
+                    let mut cut = MAX_STORED_BODY;
+                    while !body.is_char_boundary(cut) {
+                        cut -= 1;
+                    }
+                    body.truncate(cut);
+                    cut_any = true;
                 }
-                body.truncate(cut);
-                response["truncated"] = Value::Bool(true);
             }
         }
     }
-    response
+    if cut_any {
+        stored["truncated"] = Value::Bool(true);
+    }
+    stored
 }
 
 impl DatabaseManager {
@@ -765,9 +773,13 @@ mod tests {
     #[test]
     fn large_response_body_is_trimmed() {
         let big = "x".repeat(MAX_STORED_BODY + 10);
-        let trimmed = trim_response(json!({"status": 200, "body": big}));
-        assert_eq!(trimmed["body"].as_str().unwrap().len(), MAX_STORED_BODY);
+        let trimmed = trim_response(json!({"sentAt": "t", "response": {"status": 200, "bodyBase64": big}}));
+        assert_eq!(trimmed["response"]["bodyBase64"].as_str().unwrap().len(), MAX_STORED_BODY);
         assert_eq!(trimmed["truncated"], true);
+
+        let small = trim_response(json!({"response": {"body": "ok"}}));
+        assert_eq!(small["response"]["body"], "ok");
+        assert!(small.get("truncated").is_none());
     }
 
     #[test]

@@ -221,3 +221,53 @@ pub async fn read_import_file(path: String) -> ApiResult<String> {
     std::fs::read_to_string(&path)
         .map_err(|e| ApiError::Validation(format!("Cannot read file: {e}")))
 }
+
+// ---- Save response ----
+
+/// Write a response body (base64) to a path chosen in the save dialog.
+#[tauri::command]
+pub async fn save_response_file(path: String, base64: String) -> ApiResult<()> {
+    use base64::Engine;
+    let path = std::path::PathBuf::from(path.trim());
+    if path.as_os_str().is_empty() || path.file_name().is_none() {
+        return Err(ApiError::Validation("Choose a file name".into()));
+    }
+    let lower = path.to_string_lossy().to_lowercase();
+    for forbidden in [r"c:\windows", r"c:\program files"] {
+        if lower.starts_with(forbidden) {
+            return Err(ApiError::Validation("Cannot write to a system folder".into()));
+        }
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(base64.as_bytes())
+        .map_err(|e| ApiError::Validation(format!("Invalid response data: {e}")))?;
+    std::fs::write(&path, bytes)
+        .map_err(|e| ApiError::Storage(format!("Cannot save file: {e}")))
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn saves_base64_bytes_and_rejects_bad_input() {
+        let dir = std::env::temp_dir().join(format!("kangpos-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("receipt.pdf");
+        save_response_file(file.to_string_lossy().into_owned(), "JVBERi0xLjMK".into())
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(&file).unwrap(), b"%PDF-1.3\n");
+
+        assert!(matches!(
+            save_response_file(file.to_string_lossy().into_owned(), "not base64!".into()).await,
+            Err(ApiError::Validation(_))
+        ));
+        assert!(matches!(
+            save_response_file(r"C:\Windows\x.pdf".into(), "JVBERi0xLjMK".into()).await,
+            Err(ApiError::Validation(_))
+        ));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}

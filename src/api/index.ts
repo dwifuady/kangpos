@@ -116,3 +116,6 @@ export const cancelRequest = (requestId: string) => invokeSafe<boolean>('cancel_
 // ---- Import ----
 
 export const readImportFile = (path: string) => invokeSafe<string>('read_import_file', { path });
+
+export const saveResponseFile = (path: string, base64: string) =>
+  invokeSafe<void>('save_response_file', { path, base64 });

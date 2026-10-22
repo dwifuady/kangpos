@@ -1,25 +1,84 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { writeText } from '@tauri-apps/plugin-clipboard-manager';
-import { AlertTriangle, Copy, Send } from 'lucide-react';
+import { save } from '@tauri-apps/plugin-dialog';
+import { AlertTriangle, Copy, Download, FileQuestion, Send } from 'lucide-react';
+import * as api from '../../api';
 import type { StoredResponse } from '../../types';
 import { formatBytes, formatDuration, languageFor, prettyJson, statusColor } from '../../utils/format';
+import { bytesToBase64, detectPreview, responseBytes, suggestedFileName } from '../../utils/binary';
 import { CodeEditor } from './CodeEditor';
 import { useAppStore } from '../../store';
 
-type View = 'pretty' | 'raw' | 'headers';
+type View = 'preview' | 'pretty' | 'raw' | 'headers';
+
+const VIEW_LABEL: Record<View, string> = { preview: 'Preview', pretty: 'Pretty', raw: 'Raw', headers: 'Headers' };
 
 export function ResponseViewer({ stored, sending, onCancel, tabId }: { stored: StoredResponse | null; sending: boolean; onCancel: () => void; tabId: string }) {
-  const [view, setView] = useState<View>('pretty');
   const addToast = useAppStore(s => s.addToast);
   const response = stored?.response;
+  // Rust trims very large bodies when it stores the response; the cut copy can't be previewed.
+  const cutOnSave = !!(stored as (StoredResponse & { truncated?: boolean }) | null)?.truncated;
 
   const body = response?.body ?? null;
+  const bytes = useMemo(() => {
+    if (!response) return null;
+    try {
+      return responseBytes(response);
+    } catch {
+      return null; // malformed base64 (e.g. cut on save)
+    }
+  }, [response]);
+  const preview = useMemo(() => (response && bytes ? detectPreview(response.contentType, bytes) : null), [response, bytes]);
   const language = useMemo(() => (response && body !== null ? languageFor(response.contentType, body) : 'plaintext'), [response, body]);
   const pretty = useMemo(() => (body !== null && language === 'json' ? prettyJson(body) : (body ?? '')), [body, language]);
+
+  const views: View[] = [];
+  if (preview) views.push('preview');
+  if (body !== null) views.push('pretty', 'raw');
+  views.push('headers');
+
+  // Images and PDFs open in Preview; text (including HTML) opens as Pretty.
+  const defaultView: View = preview && (preview.kind !== 'html' || body === null) ? 'preview' : body !== null ? 'pretty' : 'headers';
+  const [view, setView] = useState<View>(defaultView);
+  useEffect(() => setView(defaultView), [stored?.sentAt, tabId]); // eslint-disable-line react-hooks/exhaustive-deps -- reset per response
+  const activeView = views.includes(view) ? view : defaultView;
+
+  // Blob URL for image / PDF previews.
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (!preview || preview.kind === 'html' || !bytes || cutOnSave) {
+      setBlobUrl(null);
+      return;
+    }
+    const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: preview.mime }));
+    setBlobUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [preview, bytes, cutOnSave]);
+
+  const [imageSize, setImageSize] = useState<string | null>(null);
+  useEffect(() => setImageSize(null), [blobUrl]);
 
   const copy = async (text: string) => {
     await writeText(text);
     addToast({ type: 'success', message: 'Copied to clipboard', duration: 1500 });
+  };
+
+  const saveToFile = async () => {
+    if (!response || !bytes) return;
+    const name = suggestedFileName(response, stored?.url ?? '');
+    const ext = name.includes('.') ? name.split('.').pop()! : '';
+    const path = await save({
+      title: 'Save response',
+      defaultPath: name,
+      filters: ext ? [{ name: ext.toUpperCase(), extensions: [ext] }, { name: 'All files', extensions: ['*'] }] : undefined,
+    });
+    if (!path) return;
+    try {
+      await api.saveResponseFile(path, bytesToBase64(bytes));
+      addToast({ type: 'success', message: `Saved ${path.split(/[\\/]/).pop()}` });
+    } catch (e) {
+      addToast({ type: 'error', message: e instanceof Error ? e.message : String(e) });
+    }
   };
 
   return (
@@ -39,8 +98,12 @@ export function ResponseViewer({ stored, sending, onCancel, tabId }: { stored: S
             </span>
             <span className="text-[11px] text-[var(--text-secondary)]">{formatDuration(response.durationMs)}</span>
             <span className="text-[11px] text-[var(--text-secondary)]">{formatBytes(response.sizeBytes)}</span>
-            {response.truncated && (
-              <span className="text-[11px] text-amber-400 flex items-center gap-1" title="Body was cut off (very large response)">
+            {preview && preview.kind !== 'html' && <span className="text-[11px] text-[var(--text-muted)]">{preview.mime}</span>}
+            {(response.truncated || cutOnSave) && (
+              <span
+                className="text-[11px] text-amber-400 flex items-center gap-1"
+                title={cutOnSave ? 'Only the first 2 MB was kept when this tab was saved; send again for the full body' : 'Body was cut off (very large response)'}
+              >
                 <AlertTriangle className="w-3 h-3" /> truncated
               </span>
             )}
@@ -51,7 +114,7 @@ export function ResponseViewer({ stored, sending, onCancel, tabId }: { stored: S
             {new Date(stored.sentAt).toLocaleTimeString()} · {stored.method} {stored.url}
           </span>
         )}
-        <div className="ml-auto flex items-center gap-1">
+        <div className="ml-auto flex items-center gap-1 shrink-0">
           {sending && (
             <button onClick={onCancel} className="px-2 py-0.5 text-[12px] rounded-md bg-red-500/15 text-red-400 hover:bg-red-500/25">
               Cancel
@@ -59,21 +122,31 @@ export function ResponseViewer({ stored, sending, onCancel, tabId }: { stored: S
           )}
           {response && (
             <>
-              {(['pretty', 'raw', 'headers'] as View[]).map(v => (
+              {views.map(v => (
                 <button
                   key={v}
                   onClick={() => setView(v)}
-                  className={`px-2 py-0.5 rounded-md text-[12px] capitalize ${view === v ? 'bg-[var(--bg-active)] text-[var(--text-primary)]' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}`}
+                  className={`px-2 py-0.5 rounded-md text-[12px] ${activeView === v ? 'bg-[var(--bg-active)] text-[var(--text-primary)]' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}`}
                 >
-                  {v === 'headers' ? `Headers (${response.headers.length})` : v}
+                  {v === 'headers' ? `Headers (${response.headers.length})` : VIEW_LABEL[v]}
                 </button>
               ))}
+              {activeView !== 'preview' && (body !== null || activeView === 'headers') && (
+                <button
+                  onClick={() => copy(activeView === 'headers' ? response.headers.map(([k, v]) => `${k}: ${v}`).join('\n') : activeView === 'pretty' ? pretty : (body ?? ''))}
+                  className="p-1 rounded-md text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]"
+                  title="Copy"
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                </button>
+              )}
               <button
-                onClick={() => copy(view === 'headers' ? response.headers.map(([k, v]) => `${k}: ${v}`).join('\n') : view === 'pretty' ? pretty : (body ?? response.bodyBase64 ?? ''))}
+                onClick={saveToFile}
+                disabled={!bytes || cutOnSave}
                 className="p-1 rounded-md text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]"
-                title="Copy"
+                title={cutOnSave ? 'Send again to save the full body' : 'Save response body to a file'}
               >
-                <Copy className="w-3.5 h-3.5" />
+                <Download className="w-3.5 h-3.5" />
               </button>
             </>
           )}
@@ -94,7 +167,8 @@ export function ResponseViewer({ stored, sending, onCancel, tabId }: { stored: S
             {stored.error}
           </div>
         )}
-        {response && view === 'headers' && (
+
+        {response && activeView === 'headers' && (
           <div className="h-full overflow-auto px-1">
             <table className="w-full text-[12px] font-mono">
               <tbody>
@@ -108,18 +182,60 @@ export function ResponseViewer({ stored, sending, onCancel, tabId }: { stored: S
             </table>
           </div>
         )}
-        {response && view !== 'headers' && body === null && (
-          <div className="p-3 text-[13px] text-[var(--text-muted)]">
-            Binary response ({formatBytes(response.sizeBytes)}, {response.contentType ?? 'unknown type'}). Copy gives the base64 body.
+
+        {response && activeView === 'preview' && preview && (
+          <div className="h-full rounded-md border border-[var(--border-color)] overflow-hidden">
+            {cutOnSave ? (
+              <div className="h-full flex flex-col items-center justify-center gap-2 text-[13px] text-[var(--text-muted)]">
+                <AlertTriangle className="w-5 h-5 text-amber-400" />
+                Only part of this response was kept when the tab was saved. Send again to preview it.
+              </div>
+            ) : preview.kind === 'image' ? (
+              blobUrl && (
+                <div className="h-full flex flex-col">
+                  <div
+                    className="flex-1 min-h-0 flex items-center justify-center p-3 overflow-auto"
+                    style={{ background: 'repeating-conic-gradient(var(--bg-hover) 0% 25%, transparent 0% 50%) 50% / 16px 16px' }}
+                  >
+                    <img
+                      src={blobUrl}
+                      alt="Response image"
+                      className="max-w-full max-h-full object-contain"
+                      onLoad={e => setImageSize(`${e.currentTarget.naturalWidth} × ${e.currentTarget.naturalHeight}`)}
+                      onError={() => setImageSize('could not display this image')}
+                    />
+                  </div>
+                  {imageSize && <div className="px-2 py-1 text-[11px] text-[var(--text-muted)] border-t border-[var(--border-subtle)]">{imageSize}</div>}
+                </div>
+              )
+            ) : preview.kind === 'pdf' ? (
+              blobUrl && <iframe src={blobUrl} title="PDF preview" className="w-full h-full bg-white" />
+            ) : (
+              // HTML: rendered without scripts, forms or navigation.
+              <iframe srcDoc={body ?? ''} sandbox="" title="HTML preview" className="w-full h-full bg-white" />
+            )}
           </div>
         )}
-        {response && view !== 'headers' && body !== null && (
+
+        {response && activeView !== 'headers' && activeView !== 'preview' && body !== null && (
           <CodeEditor
-            path={`kangpos://tab/${tabId}/response-${view}`}
-            value={view === 'pretty' ? pretty : body}
-            language={view === 'pretty' ? language : 'plaintext'}
+            path={`kangpos://tab/${tabId}/response-${activeView}`}
+            value={activeView === 'pretty' ? pretty : body}
+            language={activeView === 'pretty' ? language : 'plaintext'}
             readOnly
           />
+        )}
+
+        {response && body === null && !preview && activeView !== 'headers' && (
+          <div className="h-full flex flex-col items-center justify-center gap-2 text-center text-[13px] text-[var(--text-muted)]">
+            <FileQuestion className="w-6 h-6 opacity-60" />
+            <p>
+              Binary response ({formatBytes(response.sizeBytes)}, {response.contentType ?? 'unknown type'}) that can't be previewed.
+            </p>
+            <button onClick={saveToFile} className="flex items-center gap-1.5 px-3 py-1 rounded-md bg-[var(--bg-hover)] hover:bg-[var(--bg-active)] text-[var(--text-primary)]">
+              <Download className="w-3.5 h-3.5" /> Save to file…
+            </button>
+          </div>
         )}
       </div>
     </div>
