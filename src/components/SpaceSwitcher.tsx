@@ -153,7 +153,7 @@ export function SpaceDialog() {
         value={name}
         onChange={e => setName(e.target.value)}
         onKeyDown={e => e.key === 'Enter' && submit()}
-        placeholder="e.g. BlazeX Hub"
+        placeholder="e.g. Payments API"
         className={`${inputClass} mb-3`}
       />
       <label className={labelClass}>Color</label>

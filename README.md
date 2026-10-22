@@ -19,8 +19,9 @@ npm install
 npm run tauri dev
 ```
 
-On the BizCover network cargo can fail with `CRYPT_E_NO_REVOCATION_CHECK`. Run it with
-`CARGO_HTTP_CHECK_REVOKE=false` (set it in your shell profile to make it stick).
+Behind a corporate proxy or VPN, cargo on Windows can fail with `CRYPT_E_NO_REVOCATION_CHECK`.
+Run it with `CARGO_HTTP_CHECK_REVOKE=false` (set it in your shell profile to make it stick).
+`task run` and `task build` already do this.
 
 `npm run dev` alone serves the UI in a normal browser with an in-memory mock backend
 (`src/dev/browserMock.ts`), which is handy for UI work. Requests there go through `fetch`, so CORS
