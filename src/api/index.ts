@@ -15,6 +15,9 @@ import {
   type SyncStatus,
   type Tab,
   type Template,
+  type TemplateFolder,
+  type TemplateLayout,
+  type TemplateOrderInput,
 } from '../types';
 
 export { ApiErrorException } from './client';
@@ -73,6 +76,29 @@ export const updateTemplate = async (
 
 export const deleteTemplate = (id: string) => invokeSafe<void>('delete_template', { id });
 
+const toLayout = (layout: TemplateLayout): TemplateLayout => ({
+  folders: layout.folders,
+  templates: layout.templates.map(toTemplate),
+});
+
+export const listTemplateFolders = (spaceId: string) =>
+  invokeSafe<TemplateFolder[]>('list_template_folders', { spaceId });
+
+export const createTemplateFolder = async (spaceId: string, path: string) =>
+  toLayout(await invokeSafe<TemplateLayout>('create_template_folder', { spaceId, path }));
+
+export const renameTemplateFolder = async (id: string, path: string) =>
+  toLayout(await invokeSafe<TemplateLayout>('rename_template_folder', { id, path }));
+
+export const deleteTemplateFolder = async (id: string) =>
+  toLayout(await invokeSafe<TemplateLayout>('delete_template_folder', { id }));
+
+export const arrangeTemplateFolders = async (spaceId: string, paths: string[]) =>
+  toLayout(await invokeSafe<TemplateLayout>('arrange_template_folders', { spaceId, paths }));
+
+export const arrangeTemplates = async (spaceId: string, items: TemplateOrderInput[]) =>
+  toLayout(await invokeSafe<TemplateLayout>('arrange_templates', { spaceId, items }));
+
 // ---- Tabs ----
 
 export const listTabs = async (spaceId: string) =>
@@ -100,6 +126,10 @@ export const updateTab = async (id: string, input: UpdateTabInput) =>
   toTab(await invokeSafe<Tab>('update_tab', { id, input }));
 
 export const deleteTab = (id: string) => invokeSafe<void>('delete_tab', { id });
+
+/** New sidebar order, top to bottom (pinned first). */
+export const reorderTabs = (spaceId: string, ids: string[]) =>
+  invokeSafe<void>('reorder_tabs', { spaceId, ids });
 
 // ---- App state ----
 

@@ -34,13 +34,17 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     tauri::Builder::default()
         .setup(move |app| {
-            let mica = app
-                .get_webview_window("main")
-                .map(|w| {
-                    w.set_effects(EffectsBuilder::new().effect(Effect::Mica).build())
-                        .is_ok()
-                })
-                .unwrap_or(false);
+            // Mica is a Windows 11 backdrop. `set_effects` returns Ok even where the
+            // platform ignores it (Linux, Windows 10), so only Windows may claim it —
+            // otherwise the chrome turns translucent over an empty window.
+            let mica = cfg!(target_os = "windows")
+                && app
+                    .get_webview_window("main")
+                    .map(|w| {
+                        w.set_effects(EffectsBuilder::new().effect(Effect::Mica).build())
+                            .is_ok()
+                    })
+                    .unwrap_or(false);
             app.manage(MicaEnabled(mica));
 
             // Load and watch every space that is linked to a folder.
@@ -66,10 +70,17 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             commands::create_templates,
             commands::update_template,
             commands::delete_template,
+            commands::list_template_folders,
+            commands::create_template_folder,
+            commands::rename_template_folder,
+            commands::delete_template_folder,
+            commands::arrange_template_folders,
+            commands::arrange_templates,
             commands::list_tabs,
             commands::create_tab,
             commands::update_tab,
             commands::delete_tab,
+            commands::reorder_tabs,
             commands::get_app_state,
             commands::set_app_state,
             commands::send_request,

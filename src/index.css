@@ -48,7 +48,7 @@
 
   /* Window chrome surfaces (opaque by default, translucent when Mica is active) */
   --app-bg: var(--bg-primary);
-  --sidebar-surface: rgba(var(--sidebar-bg-rgb), 0.85);
+  --sidebar-surface: var(--sidebar-bg);
 
   /* Radius - Fluent: 4px controls, 8px overlays */
   --radius-sm: 2px;

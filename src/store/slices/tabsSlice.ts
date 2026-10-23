@@ -37,6 +37,8 @@ export interface TabsSlice {
   togglePin: (id: string) => void;
   duplicateTab: (id: string) => Promise<void>;
   closeTab: (id: string) => Promise<void>;
+  /** New sidebar order, top to bottom (pinned first). */
+  reorderTabs: (ids: string[]) => Promise<void>;
   cycleTab: (direction: 1 | -1) => void;
   flushTabSaves: () => Promise<void>;
 
@@ -180,6 +182,21 @@ export const createTabsSlice: StateCreator<AppState, [], [], TabsSlice> = (set, 
       set({ tabs: remaining, activeTabId: nextActive });
       rememberTab(nextActive);
       await api.deleteTab(id).catch(e => toastError('Failed to close tab', e));
+    },
+
+    reorderTabs: async (ids) => {
+      const spaceId = get().activeSpaceId;
+      if (!spaceId) return;
+      const byId = new Map(get().tabs.map(t => [t.id, t]));
+      const count = ids.length;
+      const ordered = ids.flatMap((id, i) => {
+        const tab = byId.get(id);
+        return tab ? [{ ...tab, sort_order: count - i }] : [];
+      });
+      const orderedIds = new Set(ids);
+      const rest = get().tabs.filter(t => !orderedIds.has(t.id));
+      set({ tabs: [...ordered, ...rest] });
+      await api.reorderTabs(spaceId, ids).catch(e => toastError('Failed to reorder tabs', e));
     },
 
     cycleTab: (direction) => {

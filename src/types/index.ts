@@ -104,6 +104,30 @@ export interface Template {
   updated_at: string;
 }
 
+/** A folder in the Templates sidebar. Its own row keeps order and empty folders. */
+export interface TemplateFolder {
+  id: string;
+  space_id: string;
+  /** `"Contacts / Admin"` for nested folders. */
+  path: string;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Folders plus templates, returned together after a sidebar change. */
+export interface TemplateLayout {
+  folders: TemplateFolder[];
+  templates: Template[];
+}
+
+/** Where a dragged template ended up. */
+export interface TemplateOrderInput {
+  id: string;
+  folder: string;
+  sort_order: number;
+}
+
 export interface HttpResponse {
   status: number;
   statusText: string;

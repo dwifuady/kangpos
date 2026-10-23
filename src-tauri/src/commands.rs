@@ -3,7 +3,8 @@
 use crate::http::{self, HttpResponse, HttpState, SendRequestInput};
 use crate::storage::{
     CreateTabInput, CreateTemplateInput, DatabaseManager, Environment, Space, StorageError, Tab,
-    Template, UpdateEnvironmentInput, UpdateSpaceInput, UpdateTabInput, UpdateTemplateInput,
+    Template, TemplateFolder, TemplateOrderInput, UpdateEnvironmentInput, UpdateSpaceInput,
+    UpdateTabInput, UpdateTemplateInput,
 };
 use crate::sync::{self, SyncError, SyncManager, SyncStatus};
 use serde_json::Value;
@@ -36,6 +37,7 @@ impl From<StorageError> for ApiError {
     fn from(err: StorageError) -> Self {
         match err {
             StorageError::NotFound(what) => ApiError::NotFound(what),
+            StorageError::Validation(msg) => ApiError::Validation(msg),
             other => ApiError::Storage(other.to_string()),
         }
     }
@@ -52,6 +54,20 @@ impl From<SyncError> for ApiError {
 }
 
 type ApiResult<T> = Result<T, ApiError>;
+
+/// Folder rows plus templates after a sidebar change, so the UI refreshes both at once.
+#[derive(Debug, serde::Serialize)]
+pub struct TemplateLayout {
+    pub folders: Vec<TemplateFolder>,
+    pub templates: Vec<Template>,
+}
+
+fn template_layout(db: &DatabaseManager, space_id: &str) -> ApiResult<TemplateLayout> {
+    Ok(TemplateLayout {
+        folders: db.list_template_folders(space_id)?,
+        templates: db.list_templates(space_id)?,
+    })
+}
 
 /// Report a folder write failure without losing the database change.
 fn file_error(e: SyncError) -> ApiError {
@@ -244,6 +260,88 @@ pub async fn delete_template(state: State<'_, AppState>, id: String) -> ApiResul
     })
 }
 
+// ---- Template folders ----
+
+#[tauri::command]
+pub async fn list_template_folders(
+    state: State<'_, AppState>,
+    space_id: String,
+) -> ApiResult<Vec<TemplateFolder>> {
+    Ok(state.db.list_template_folders(&space_id)?)
+}
+
+#[tauri::command]
+pub async fn create_template_folder(
+    state: State<'_, AppState>,
+    space_id: String,
+    path: String,
+) -> ApiResult<TemplateLayout> {
+    state.sync.exclusive(|| {
+        let folder = state.db.create_template_folder(&space_id, &path)?;
+        sync::ensure_folder_dir(&state.db, &space_id, &folder.path).map_err(file_error)?;
+        template_layout(&state.db, &space_id)
+    })
+}
+
+#[tauri::command]
+pub async fn rename_template_folder(
+    state: State<'_, AppState>,
+    id: String,
+    path: String,
+) -> ApiResult<TemplateLayout> {
+    state.sync.exclusive(|| {
+        let rename = state.db.rename_template_folder(&id, &path)?;
+        for template_id in &rename.moved_template_ids {
+            sync::write_template(&state.db, template_id).map_err(file_error)?;
+        }
+        let space_id = rename.folder.space_id.clone();
+        sync::ensure_folder_dir(&state.db, &space_id, &rename.folder.path).map_err(file_error)?;
+        sync::remove_folder_dir(&state.db, &space_id, &rename.old_path).map_err(file_error)?;
+        template_layout(&state.db, &space_id)
+    })
+}
+
+#[tauri::command]
+pub async fn delete_template_folder(
+    state: State<'_, AppState>,
+    id: String,
+) -> ApiResult<TemplateLayout> {
+    state.sync.exclusive(|| {
+        let folder = state.db.delete_template_folder(&id)?;
+        sync::remove_folder_dir(&state.db, &folder.space_id, &folder.path).map_err(file_error)?;
+        template_layout(&state.db, &folder.space_id)
+    })
+}
+
+/// New folder order in the sidebar, top to bottom.
+#[tauri::command]
+pub async fn arrange_template_folders(
+    state: State<'_, AppState>,
+    space_id: String,
+    paths: Vec<String>,
+) -> ApiResult<TemplateLayout> {
+    state.sync.exclusive(|| {
+        state.db.arrange_template_folders(&space_id, &paths)?;
+        template_layout(&state.db, &space_id)
+    })
+}
+
+/// Drag result for templates: their new folder and position.
+#[tauri::command]
+pub async fn arrange_templates(
+    state: State<'_, AppState>,
+    space_id: String,
+    items: Vec<TemplateOrderInput>,
+) -> ApiResult<TemplateLayout> {
+    state.sync.exclusive(|| {
+        let moved = state.db.arrange_templates(&space_id, &items)?;
+        for id in &moved {
+            sync::write_template(&state.db, id).map_err(file_error)?;
+        }
+        template_layout(&state.db, &space_id)
+    })
+}
+
 // ---- Tabs ----
 
 #[tauri::command]
@@ -268,6 +366,16 @@ pub async fn update_tab(
 #[tauri::command]
 pub async fn delete_tab(state: State<'_, AppState>, id: String) -> ApiResult<()> {
     Ok(state.db.delete_tab(&id)?)
+}
+
+/// New sidebar order of tabs, top to bottom, pinned ones included.
+#[tauri::command]
+pub async fn reorder_tabs(
+    state: State<'_, AppState>,
+    space_id: String,
+    ids: Vec<String>,
+) -> ApiResult<()> {
+    Ok(state.db.reorder_tabs(&space_id, &ids)?)
 }
 
 // ---- App state ----

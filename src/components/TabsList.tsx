@@ -5,6 +5,7 @@ import { useAppStore } from '../store';
 import type { Tab } from '../types';
 import { tabTitle } from '../utils/request';
 import { METHOD_COLORS } from '../utils/format';
+import { dropEdgeAt, dropEdgeClass, moveId, type DropEdge } from '../utils/drag';
 import { ContextMenu, type MenuItem } from './ContextMenu';
 
 function subtitle(tab: Tab): string {
@@ -167,10 +168,24 @@ export function TabsList() {
   const inFlight = useAppStore(s => s.inFlight);
   const spaceColor = useAppStore(s => s.spaces.find(x => x.id === s.activeSpaceId)?.color ?? '#0078d4');
   const setPickerOpen = useAppStore(s => s.setPickerOpen);
+  const reorderTabs = useAppStore(s => s.reorderTabs);
   const [menu, setMenu] = useState<{ x: number; y: number; tab: Tab } | null>(null);
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<{ id: string; edge: DropEdge } | null>(null);
 
   const pinned = tabs.filter(t => t.is_pinned);
   const regular = tabs.filter(t => !t.is_pinned);
+  const dragged = dragId ? tabs.find(t => t.id === dragId) : undefined;
+
+  const dropTab = (targetId: string, after: boolean) => {
+    setDragId(null);
+    setDropTarget(null);
+    if (!dragged) return;
+    const pinnedIds = pinned.map(t => t.id);
+    const regularIds = regular.map(t => t.id);
+    const next = moveId(dragged.is_pinned ? pinnedIds : regularIds, dragged.id, targetId, after);
+    void reorderTabs(dragged.is_pinned ? [...next, ...regularIds] : [...pinnedIds, ...next]);
+  };
 
   const menuItems = (tab: Tab): (MenuItem | 'separator')[] => {
     const s = useAppStore.getState();
@@ -195,17 +210,48 @@ export function TabsList() {
     ];
   };
 
-  const renderTab = (tab: Tab) => (
-    <TabItem
-      key={tab.id}
-      tab={tab}
-      isActive={tab.id === activeTabId}
-      isNew={tab.id === lastCreatedTabId}
-      isSending={!!inFlight[tab.id]}
-      spaceColor={spaceColor}
-      onContextMenu={(e, t) => setMenu({ x: e.clientX, y: e.clientY, tab: t })}
-    />
-  );
+  const renderTab = (tab: Tab) => {
+    // Pinned and regular tabs are separate lists: a drag never crosses the divider.
+    const sameGroup = !!dragged && dragged.is_pinned === tab.is_pinned && dragged.id !== tab.id;
+    const edge = dropTarget?.id === tab.id && sameGroup ? dropTarget.edge : null;
+    return (
+      <div
+        key={tab.id}
+        draggable
+        onDragStart={e => {
+          e.dataTransfer.effectAllowed = 'move';
+          e.dataTransfer.setData('text/plain', tab.id);
+          setDragId(tab.id);
+        }}
+        onDragEnd={() => {
+          setDragId(null);
+          setDropTarget(null);
+        }}
+        onDragOver={e => {
+          if (!sameGroup) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'move';
+          const nextEdge = dropEdgeAt(e);
+          setDropTarget(prev => (prev?.id === tab.id && prev.edge === nextEdge ? prev : { id: tab.id, edge: nextEdge }));
+        }}
+        onDragLeave={() => setDropTarget(prev => (prev?.id === tab.id ? null : prev))}
+        onDrop={e => {
+          e.preventDefault();
+          if (dropTarget?.id === tab.id && sameGroup) dropTab(tab.id, dropTarget.edge === 'after');
+        }}
+        className={`rounded-md ${dropEdgeClass(edge)} ${dragId === tab.id ? 'opacity-40' : ''}`}
+      >
+        <TabItem
+          tab={tab}
+          isActive={tab.id === activeTabId}
+          isNew={tab.id === lastCreatedTabId}
+          isSending={!!inFlight[tab.id]}
+          spaceColor={spaceColor}
+          onContextMenu={(e, t) => setMenu({ x: e.clientX, y: e.clientY, tab: t })}
+        />
+      </div>
+    );
+  };
 
   return (
     <div className="flex-1 flex flex-col min-h-0">

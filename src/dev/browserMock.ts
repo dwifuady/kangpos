@@ -16,6 +16,7 @@ export function installBrowserMock(): void {
   const spaces: Row[] = [];
   const environments: Row[] = [];
   const templates: Row[] = [];
+  const folders: Row[] = [];
   const tabs: Row[] = [];
   const appState: Record<string, unknown> = {};
   const controllers = new Map<string, AbortController>();
@@ -30,6 +31,46 @@ export function installBrowserMock(): void {
     row.updated_at = now();
     return { ...row };
   };
+
+  // Folder paths match the Rust side: `Contacts / Admin`.
+  const normPath = (path: string) =>
+    String(path ?? '')
+      .replace(/\\/g, '/')
+      .split('/')
+      .map(s => s.trim())
+      .filter(s => s && s !== '.' && s !== '..')
+      .join(' / ');
+
+  const folderList = (spaceId: string) =>
+    folders
+      .filter(f => f.space_id === spaceId)
+      .sort((a, b) => (a.sort_order as number) - (b.sort_order as number) || String(a.path).localeCompare(String(b.path)));
+
+  const ensureFolders = (spaceId: string, path: string) => {
+    const parts = path.split(' / ').filter(Boolean);
+    for (let i = 1; i <= parts.length; i++) {
+      const current = parts.slice(0, i).join(' / ');
+      if (folders.some(f => f.space_id === spaceId && f.path === current)) continue;
+      const next = folderList(spaceId).reduce((max, f) => Math.max(max, (f.sort_order as number) + 1), 0);
+      folders.push({ id: id(), space_id: spaceId, path: current, sort_order: next, created_at: now(), updated_at: now() });
+    }
+  };
+
+  const listTemplatesFor = (spaceId: string) =>
+    templates
+      .filter(t => t.space_id === spaceId)
+      .sort(
+        (a, b) =>
+          String(a.folder).localeCompare(String(b.folder)) ||
+          (a.sort_order as number) - (b.sort_order as number) ||
+          String(a.name).localeCompare(String(b.name)),
+      )
+      .map(t => ({ ...t }));
+
+  const layout = (spaceId: string) => ({
+    folders: folderList(spaceId).map(f => ({ ...f })),
+    templates: listTemplatesFor(spaceId),
+  });
 
   mockIPC(async (cmd, raw) => {
     const args = (raw ?? {}) as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -63,20 +104,114 @@ export function installBrowserMock(): void {
         environments.splice(environments.findIndex(e => e.id === args.id), 1);
         return null;
       case 'list_templates':
-        return templates.filter(t => t.space_id === args.spaceId).map(t => ({ ...t }));
+        return listTemplatesFor(args.spaceId);
       case 'create_templates':
         return args.inputs.map((input: Row, i: number) => {
-          const row = { ...input, id: id(), sort_order: i, created_at: now(), updated_at: now() };
+          const folder = normPath(String(input.folder ?? ''));
+          if (folder) ensureFolders(String(input.space_id), folder);
+          const row = { ...input, folder, id: id(), sort_order: i, created_at: now(), updated_at: now() };
           templates.push(row);
           return { ...row };
         });
-      case 'update_template':
-        return patch(templates.find(t => t.id === args.id), args.input);
+      case 'update_template': {
+        const row = templates.find(t => t.id === args.id);
+        if (!row) throw { code: 'NotFound', message: 'not found' };
+        const input = { ...args.input };
+        if (typeof input.folder === 'string') {
+          input.folder = normPath(input.folder);
+          if (input.folder) ensureFolders(String(row.space_id), input.folder);
+        }
+        return patch(row, input);
+      }
       case 'delete_template':
         templates.splice(templates.findIndex(t => t.id === args.id), 1);
         return null;
+      case 'list_template_folders':
+        return folderList(args.spaceId).map(f => ({ ...f }));
+      case 'create_template_folder': {
+        const path = normPath(args.path);
+        if (!path) throw { code: 'Validation', message: 'Folder name is required' };
+        if (folders.some(f => f.space_id === args.spaceId && f.path === path))
+          throw { code: 'Validation', message: `Folder "${path}" already exists` };
+        ensureFolders(args.spaceId, path);
+        return layout(args.spaceId);
+      }
+      case 'rename_template_folder': {
+        const folder = folders.find(f => f.id === args.id);
+        if (!folder) throw { code: 'NotFound', message: 'Folder not found' };
+        const space = String(folder.space_id);
+        const old = String(folder.path);
+        const next = normPath(args.path);
+        if (!next) throw { code: 'Validation', message: 'Folder name is required' };
+        if (next === old) return layout(space);
+        if (next.startsWith(`${old} / `))
+          throw { code: 'Validation', message: 'A folder cannot be moved inside itself' };
+        if (folders.some(f => f.space_id === space && f.path === next))
+          throw { code: 'Validation', message: `Folder "${next}" already exists` };
+        const affected = folders.filter(
+          f => f.space_id === space && (f.path === old || String(f.path).startsWith(`${old} / `)),
+        );
+        const moving = new Set(affected.map(f => f.id));
+        const nextPaths = affected.map(f => next + String(f.path).slice(old.length));
+        if (folders.some(f => f.space_id === space && !moving.has(f.id) && nextPaths.includes(String(f.path))))
+          throw { code: 'Validation', message: `Folder "${next}" already exists` };
+        const parent = next.split(' / ').slice(0, -1).join(' / ');
+        if (parent) ensureFolders(space, parent);
+        for (const f of affected) {
+          f.path = next + String(f.path).slice(old.length);
+          f.updated_at = now();
+        }
+        for (const t of templates) {
+          if (t.space_id !== space) continue;
+          const tf = String(t.folder);
+          if (tf === old || tf.startsWith(`${old} / `)) {
+            t.folder = next + tf.slice(old.length);
+            t.updated_at = now();
+          }
+        }
+        return layout(space);
+      }
+      case 'delete_template_folder': {
+        const folder = folders.find(f => f.id === args.id);
+        if (!folder) throw { code: 'NotFound', message: 'Folder not found' };
+        const space = String(folder.space_id);
+        const path = String(folder.path);
+        if (folders.some(f => f.space_id === space && f.id !== folder.id && String(f.path).startsWith(`${path} / `)))
+          throw { code: 'Validation', message: 'Folder has subfolders; delete them first' };
+        if (templates.some(t => t.space_id === space && t.folder === path))
+          throw { code: 'Validation', message: 'Folder still holds templates; move or delete them first' };
+        folders.splice(folders.indexOf(folder), 1);
+        return layout(space);
+      }
+      case 'arrange_template_folders': {
+        const listed: string[] = args.paths ?? [];
+        const all = folderList(args.spaceId);
+        const ordered = [
+          ...listed.map(p => all.find(f => f.path === p)).filter((f): f is Row => !!f),
+          ...all.filter(f => !listed.includes(String(f.path))),
+        ];
+        ordered.forEach((f, i) => {
+          f.sort_order = i;
+          f.updated_at = now();
+        });
+        return layout(args.spaceId);
+      }
+      case 'arrange_templates':
+        for (const item of args.items ?? []) {
+          const row = templates.find(t => t.id === item.id);
+          if (!row) continue;
+          const folder = normPath(item.folder);
+          if (folder) ensureFolders(String(row.space_id), folder);
+          row.folder = folder;
+          row.sort_order = item.sort_order;
+          row.updated_at = now();
+        }
+        return layout(args.spaceId);
       case 'list_tabs':
-        return tabs.filter(t => t.space_id === args.spaceId).map(t => ({ ...t }));
+        return tabs
+          .filter(t => t.space_id === args.spaceId)
+          .sort((a, b) => Number(b.is_pinned) - Number(a.is_pinned) || (b.sort_order as number) - (a.sort_order as number))
+          .map(t => ({ ...t }));
       case 'create_tab': {
         const row = { ...args.input, id: id(), custom_title: null, response: null, is_pinned: false, sort_order: tabs.length, created_at: now(), updated_at: now() };
         tabs.push(row);
@@ -87,6 +222,14 @@ export function installBrowserMock(): void {
       case 'delete_tab':
         tabs.splice(tabs.findIndex(t => t.id === args.id), 1);
         return null;
+      case 'reorder_tabs': {
+        const count = (args.ids as string[]).length;
+        (args.ids as string[]).forEach((tabId, i) => {
+          const row = tabs.find(t => t.id === tabId && t.space_id === args.spaceId);
+          if (row) row.sort_order = count - i;
+        });
+        return null;
+      }
       case 'get_app_state':
         return { ...appState };
       case 'set_app_state':
