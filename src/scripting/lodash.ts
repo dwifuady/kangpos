@@ -34,9 +34,21 @@ export function has(object: any, path: any): boolean {
   return true;
 }
 
+/** Keys that would let a script reach or replace a prototype. Real lodash skips them too. */
+const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+function isUnsafeKey(key: string | number): boolean {
+  return typeof key === 'string' && UNSAFE_KEYS.has(key);
+}
+
+function isUnsafePath(path: any): boolean {
+  return getPath(path).some(isUnsafeKey);
+}
+
 export function set(object: any, path: any, value: any): any {
   const keys = getPath(path);
   if (keys.length === 0) return object;
+  if (isUnsafePath(keys)) return object;
   if (object === null || typeof object !== 'object') return object;
   let current = object;
   keys.forEach((key, i) => {
@@ -52,6 +64,7 @@ export function set(object: any, path: any, value: any): any {
 export function unset(object: any, path: any): boolean {
   const keys = getPath(path);
   if (keys.length === 0) return true;
+  if (isUnsafePath(keys)) return true;
   const parent = get(object, keys.slice(0, -1));
   if (parent === null || typeof parent !== 'object') return true;
   return delete parent[keys[keys.length - 1]];
@@ -80,7 +93,7 @@ function cloneDeep<T>(value: T): T {
   if (value instanceof Date) return new Date(value.getTime()) as unknown as T;
   if (Array.isArray(value)) return value.map(cloneDeep) as unknown as T;
   const out: any = {};
-  for (const [k, v] of Object.entries(value)) out[k] = cloneDeep(v);
+  for (const [k, v] of Object.entries(value)) if (!isUnsafeKey(k)) out[k] = cloneDeep(v);
   return out as T;
 }
 
@@ -274,10 +287,19 @@ export function createLodash(): Record<string, any> {
     entries: (v: any) => Object.entries(v ?? {}),
     toPairs: (v: any) => Object.entries(v ?? {}),
     fromPairs: (pairs: any[]) => Object.fromEntries(pairs ?? []),
-    assign: Object.assign,
+    assign(target: any, ...sources: any[]): any {
+      for (const source of sources) {
+        for (const key of Reflect.ownKeys(source ?? {})) {
+          if (isUnsafeKey(key as string)) continue;
+          if (Object.prototype.propertyIsEnumerable.call(source, key)) target[key as any] = source[key as any];
+        }
+      }
+      return target;
+    },
     merge(target: any, ...sources: any[]): any {
       const deep = (to: any, from: any) => {
         for (const [k, v] of Object.entries(from ?? {})) {
+          if (isUnsafeKey(k)) continue;
           if (isPlainObject(v) && isPlainObject(to[k])) deep(to[k], v);
           else if (Array.isArray(v)) to[k] = cloneDeep(v);
           else to[k] = v;
@@ -287,7 +309,11 @@ export function createLodash(): Record<string, any> {
       return sources.reduce((acc, source) => deep(acc, source), target);
     },
     defaults(target: any, ...sources: any[]): any {
-      for (const source of sources) for (const [k, v] of Object.entries(source ?? {})) if (target[k] === undefined) target[k] = v;
+      for (const source of sources) {
+        for (const [k, v] of Object.entries(source ?? {})) {
+          if (!isUnsafeKey(k) && target[k] === undefined) target[k] = v;
+        }
+      }
       return target;
     },
     pick(object: any, ...paths: any[]): any {

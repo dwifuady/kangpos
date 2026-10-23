@@ -311,6 +311,30 @@ function responseApi(res: SandboxResponse) {
 
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor as new (...args: string[]) => (...args: unknown[]) => Promise<unknown>;
 
+/** Postman APIs KangPos does not implement, with the reason to show when a script reaches for them. */
+const PM_UNAVAILABLE: Record<string, string> = {
+  cookies: 'cookie jars are not implemented',
+  vault: 'secrets are not implemented',
+  execution: 'pm.execution.setNextRequest() is not implemented',
+  getData: 'iteration data is not implemented',
+};
+
+/**
+ * Reading an unimplemented `pm.*` API should explain itself instead of throwing
+ * `Cannot read properties of undefined` from the property after it.
+ */
+function guardPm(api: Record<string, unknown>): Record<string, unknown> {
+  return new Proxy(api, {
+    get(target, property, receiver) {
+      if (typeof property === 'symbol' || property === 'then' || property === 'toJSON' || property in target) {
+        return Reflect.get(target, property, receiver);
+      }
+      const reason = PM_UNAVAILABLE[property];
+      throw new Error(`pm.${property} is not available in KangPos scripts${reason ? ` (${reason})` : ''}.`);
+    },
+  });
+}
+
 export async function executeScript(code: string, ctx: ScriptContext, hooks: ScriptHooks): Promise<ScriptOutcome> {
   const started = Date.now();
   const tests: ScriptTest[] = [];
@@ -468,7 +492,7 @@ export async function executeScript(code: string, ctx: ScriptContext, hooks: Scr
     },
   };
 
-  const pm = {
+  const pm = guardPm({
     info: { requestName: ctx.requestName, eventName: ctx.kind === 'before' ? 'prerequest' : 'test', iteration: 0, iterationCount: 1 },
     environment,
     variables,
@@ -483,7 +507,7 @@ export async function executeScript(code: string, ctx: ScriptContext, hooks: Scr
     expect,
     sendRequest,
     visualizer: visualizerApi,
-  };
+  });
 
   // Postman's legacy globals, still common in older collections.
   const legacyTests = new Proxy({} as Record<string, unknown>, {

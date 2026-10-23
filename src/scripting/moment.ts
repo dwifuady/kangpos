@@ -38,6 +38,15 @@ function daysInMonth(year: number, month: number): number {
   return new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
 }
 
+/**
+ * Day of the year for a calendar date. Computed from calendar parts rather than
+ * by subtracting instants: UTC has no DST, so the difference is an exact number
+ * of days, and the answer does not depend on the host timezone.
+ */
+function dayOfYear(year: number, month: number, date: number): number {
+  return Math.round((Date.UTC(year, month, date) - Date.UTC(year, 0, 1)) / 86_400_000) + 1;
+}
+
 const UNIT_ALIASES: Record<string, string> = {
   y: 'year', year: 'year', years: 'year',
   M: 'month', month: 'month', months: 'month',
@@ -97,9 +106,9 @@ function formatMoment(date: Date, utc: boolean, pattern: string): string {
       case 'M':
         return String(part('month') + 1);
       case 'DDDD':
-        return String(Math.floor((date.getTime() - new Date(part('year'), 0, 1).getTime()) / 86_400_000) + 1).padStart(3, '0');
+        return pad(dayOfYear(part('year'), part('month'), part('date')), 3);
       case 'DDD':
-        return String(Math.floor((date.getTime() - new Date(part('year'), 0, 1).getTime()) / 86_400_000) + 1);
+        return String(dayOfYear(part('year'), part('month'), part('date')));
       case 'DD':
         return pad(part('date'));
       case 'Do':
@@ -313,7 +322,10 @@ export class Moment {
         const ms = parsed.values.ms ?? 0;
         if (parsed.values.unix !== undefined) this.instant = new Date(parsed.values.unix * 1000);
         else if (parsed.values.msSinceEpoch !== undefined) this.instant = new Date(parsed.values.msSinceEpoch);
-        else if (utcMode) this.instant = new Date(Date.UTC(year, month, day, hour, minute, second, ms) - (parsed.offset ?? 0) * 60_000);
+        // A zone offset in the parsed text names the wall clock's own offset, so
+        // the instant is the same wherever the host machine happens to be.
+        else if (utcMode || parsed.offset !== null)
+          this.instant = new Date(Date.UTC(year, month, day, hour, minute, second, ms) - (parsed.offset ?? 0) * 60_000);
         else this.instant = new Date(year, month, day, hour, minute, second, ms);
         this.valid = !Number.isNaN(this.instant.getTime());
         return;
@@ -685,8 +697,10 @@ function toMoment(value: any): Moment {
   return value instanceof Moment ? value : new Moment(value);
 }
 
-export function createMoment(): Record<string, any> {
-  const moment = (input?: any, pattern?: string) => new Moment(input, pattern);
+export type MomentFactory = ((input?: any, pattern?: string) => Moment) & Record<string, any>;
+
+export function createMoment(): MomentFactory {
+  const moment = ((input?: any, pattern?: string) => new Moment(input, pattern)) as MomentFactory;
   moment.utc = (input?: any, pattern?: string) => new Moment(input, pattern, true);
   moment.unix = (seconds: number) => new Moment(Number(seconds) * 1000);
   moment.isMoment = (value: any) => value instanceof Moment;

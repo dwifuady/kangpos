@@ -8,7 +8,7 @@
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- module APIs mirror untyped libraries */
 
-import { AssertionError, expect } from './expect';
+import { AssertionError, expect, inspect } from './expect';
 import { base64ToBytes, bytesToBase64, bytesToHex, hashBytes, hashName, hexToBytes, hmac, utf8Bytes, type HashName } from './hash';
 import { createLodash } from './lodash';
 import { createMoment } from './moment';
@@ -99,9 +99,17 @@ function makeBuffer(): Record<string, any> {
       if (input instanceof ArrayBuffer) return asBuffer(new Uint8Array(input));
       throw new Error('Buffer.from expects a string, array or ArrayBuffer');
     },
-    alloc(size: number, fill = 0): ByteArray {
-      const out = new ByteArray(Math.max(0, Math.floor(size)));
-      if (fill) out.fill(Number(fill) & 0xff);
+    alloc(size: number, fill: unknown = 0): ByteArray {
+      const length = Math.max(0, Math.floor(Number(size)) || 0);
+      const out = new ByteArray(length);
+      if (typeof fill === 'string') {
+        // Node repeats the utf8 bytes of a string fill across the buffer.
+        const pattern = utf8Bytes(fill);
+        if (pattern.length > 0) for (let i = 0; i < length; i++) out[i] = pattern[i % pattern.length];
+      } else {
+        const byte = Number(fill) & 0xff;
+        if (byte) out.fill(byte);
+      }
       return out;
     },
     allocUnsafe(size: number): ByteArray {
@@ -329,7 +337,10 @@ function makeUuid(): Record<string, any> {
 function makeChai(): Record<string, any> {
   const assert = {
     equal(actual: unknown, wanted: unknown, message?: string) {
-      expect(actual, message).to.equal(wanted);
+      // chai's assert.equal is the loose (==) assertion; strictEqual is the === one.
+      if (!(actual == wanted)) {
+        throw new AssertionError(message ?? `expected ${inspect(actual)} to equal ${inspect(wanted)}`);
+      }
     },
     strictEqual(actual: unknown, wanted: unknown, message?: string) {
       expect(actual, message).to.equal(wanted);

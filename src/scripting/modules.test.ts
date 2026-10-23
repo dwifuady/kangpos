@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { createMoment } from './moment';
 import { executeScript, type ScriptContext } from './sandbox';
 
 const ctx = (): ScriptContext => ({
@@ -17,6 +18,18 @@ async function run(code: string): Promise<string> {
   const out = await executeScript(code, ctx(), noNetwork);
   if (out.error) throw new Error(out.error);
   return out.logs.at(-1)?.message ?? '';
+}
+
+/** Run `fn` as if the machine were in `tz`; the host timezone is restored afterwards. */
+function withTz<T>(tz: string, fn: () => T): T {
+  const previous = process.env.TZ;
+  process.env.TZ = tz;
+  try {
+    return fn();
+  } finally {
+    if (previous === undefined) delete process.env.TZ;
+    else process.env.TZ = previous;
+  }
 }
 
 describe('script modules', () => {
@@ -95,6 +108,97 @@ describe('script modules', () => {
         ].join(' '));
       `),
     ).toBe('2024-02-03 04:05:06 04/02/2024 2024-02-29 00:00 2');
+  });
+
+  it('computes day-of-year from the calendar date, not the host timezone', async () => {
+    expect(
+      await run(`
+        const moment = require('moment');
+        console.log(['2024-01-01', '2024-01-03', '2024-02-29', '2024-12-31']
+          .map(d => moment.utc(d + 'T02:00:00Z').format('DDD') + '/' + moment.utc(d + 'T02:00:00Z').format('DDDD'))
+          .join(' '));
+      `),
+    ).toBe('1/001 3/003 60/060 366/366');
+
+    // Hosts west of UTC used to shift (and even zero) the day-of-year.
+    const moment = createMoment();
+    for (const tz of ['America/Los_Angeles', 'Asia/Jakarta', 'UTC']) {
+      withTz(tz, () => {
+        expect(moment.utc('2024-01-03').format('DDD')).toBe('3');
+        expect(moment.utc('2024-01-01T02:00:00Z').format('DDDD')).toBe('001');
+      });
+    }
+  });
+
+  it('applies a zone offset in a parsed string regardless of the host timezone', () => {
+    const moment = createMoment();
+    for (const tz of ['America/Los_Angeles', 'Asia/Jakarta', 'UTC']) {
+      withTz(tz, () => {
+        expect(moment('2024-07-01 12:00:00 -0400', 'YYYY-MM-DD HH:mm:ss ZZ').utc().format('HH:mm')).toBe('16:00');
+        expect(moment('2024-07-01 12:00:00 +0700', 'YYYY-MM-DD HH:mm:ss ZZ').utc().format('HH:mm')).toBe('05:00');
+      });
+    }
+  });
+
+  it('fills buffers with strings and tolerates empty concatenations', async () => {
+    expect(
+      await run(`
+        const { Buffer } = require('buffer');
+        console.log([
+          Buffer.alloc(4, 'a').toString(),
+          Buffer.alloc(3, 'ab').toString(),
+          Buffer.alloc(2, 7).toString('hex'),
+          Buffer.alloc(0).length,
+          Buffer.concat([]).length,
+          Buffer.concat([Buffer.alloc(0), Buffer.from('x')]).toString(),
+        ].join('|'));
+      `),
+    ).toBe('aaaa|aba|0707|0|0|x');
+  });
+
+  it('keeps chai assert.equal loose and assert.strictEqual strict', async () => {
+    expect(
+      await run(`
+        const assert = require('chai').assert;
+        assert.equal('1', 1);
+        assert.equal(0, false);
+        let strictThrew = false;
+        try { assert.strictEqual('1', 1); } catch { strictThrew = true; }
+        let messageKept = false;
+        try { assert.equal(1, 2, 'nope'); } catch (e) { messageKept = e.message === 'nope'; }
+        console.log(strictThrew && messageKept ? 'ok' : 'bad');
+      `),
+    ).toBe('ok');
+  });
+
+  it('refuses to write prototype keys from lodash setters and mergers', async () => {
+    expect(
+      await run(`
+        const _ = require('lodash');
+        _.set({}, '__proto__.polluted', 'yes');
+        _.set({}, ['a', '__proto__', 'polluted'], 'yes');
+        _.unset({}, '__proto__.polluted');
+        _.merge({}, JSON.parse('{"__proto__":{"polluted":"yes"}}'));
+        _.merge({}, JSON.parse('{"constructor":{"prototype":{"polluted":"yes"}}}'));
+        _.assign({}, JSON.parse('{"__proto__":{"polluted":"yes"}}'));
+        _.defaults({}, JSON.parse('{"__proto__":{"polluted":"yes"}}'));
+        _.pick({}, ['__proto__.polluted']);
+        console.log(String(({}).polluted) + ' ' + String([].polluted));
+      `),
+    ).toBe('undefined undefined');
+  });
+
+  it('explains unavailable pm APIs instead of failing on undefined', async () => {
+    const cookies = await executeScript(`pm.cookies.get('session');`, ctx(), noNetwork);
+    expect(cookies.error).toBe('pm.cookies is not available in KangPos scripts (cookie jars are not implemented).');
+
+    const vault = await executeScript(`pm.vault.get('token');`, ctx(), noNetwork);
+    expect(vault.error).toMatch(/^pm\.vault is not available in KangPos scripts/);
+
+    // Everything Postman scripts do use still resolves.
+    expect(await run(`console.log(pm.info.eventName + ' ' + typeof pm.visualizer.set + ' ' + typeof pm.variables.get);`)).toBe(
+      'test function function',
+    );
   });
 
   it('explains when a module or crypto-js algorithm is missing', async () => {
