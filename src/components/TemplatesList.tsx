@@ -1,6 +1,6 @@
-// Sidebar "Templates" view: templates grouped by folder. Click opens a new tab.
-// Right-click empty space for a new folder; drag templates between folders and
-// drag folder headers to reorder them.
+// Sidebar "Templates" view: templates in a folder tree. Click opens a new tab.
+// Right-click empty space for a new folder; drag templates between folders,
+// and drag folders to reorder them or nest them inside another folder.
 import { useMemo, useState } from 'react';
 import { confirm } from '@tauri-apps/plugin-dialog';
 import {
@@ -16,43 +16,28 @@ import {
 import { useAppStore } from '../store';
 import type { Template, TemplateOrderInput } from '../types';
 import { METHOD_COLORS } from '../utils/format';
-import { dropEdgeAt, dropEdgeClass, moveId, type DropEdge } from '../utils/drag';
+import { dropEdgeAt, dropEdgeClass, dropZoneAt, type DropEdge, type DropZone } from '../utils/drag';
+import {
+  buildFolderTree,
+  folderName,
+  folderParent,
+  isSameOrInsideFolder,
+  moveFolderInOrder,
+  pruneEmptyFolders,
+  type FolderNode,
+} from '../utils/folderTree';
 import { ContextMenu, type MenuItem } from './ContextMenu';
 import { GhostButton, inputClass, labelClass, Modal, PrimaryButton } from './Modal';
-
-/**
- * Group templates by folder. `folderOrder` seeds every folder (so empty folders
- * show) and sets their order; folders missing from it follow alphabetically.
- * Templates without a folder come last.
- */
-export function groupByFolder(templates: Template[], folderOrder: string[] = []): [string, Template[]][] {
-  const groups = new Map<string, Template[]>();
-  for (const path of folderOrder) groups.set(path, []);
-  for (const t of templates) {
-    const list = groups.get(t.folder) ?? [];
-    list.push(t);
-    groups.set(t.folder, list);
-  }
-  const rank = new Map(folderOrder.map((path, i) => [path, i]));
-  return [...groups].sort(([a], [b]) => {
-    if (a === b) return 0;
-    if (a === '') return 1;
-    if (b === '') return -1;
-    const ra = rank.get(a);
-    const rb = rank.get(b);
-    if (ra !== undefined && rb !== undefined) return ra - rb;
-    if (ra !== undefined) return -1;
-    if (rb !== undefined) return 1;
-    return a.localeCompare(b);
-  });
-}
 
 type Drag = { kind: 'template'; id: string } | { kind: 'folder'; path: string };
 
 type Drop =
   | { kind: 'template'; id: string; folder: string; edge: 'before' | 'after' }
   | { kind: 'folder'; path: string; edge: 'before' | 'after' }
-  | { kind: 'intoFolder'; folder: string };
+  /** A template dropped on a folder header. */
+  | { kind: 'intoFolder'; folder: string }
+  /** A folder dropped on the middle of another folder header. */
+  | { kind: 'folderInto'; folder: string };
 
 type MenuState = { x: number; y: number } & (
   | { kind: 'template'; template: Template }
@@ -68,6 +53,7 @@ export function TemplatesList() {
   const openTemplate = useAppStore(s => s.openTemplate);
   const deleteTemplate = useAppStore(s => s.deleteTemplate);
   const deleteTemplateFolder = useAppStore(s => s.deleteTemplateFolder);
+  const renameTemplateFolder = useAppStore(s => s.renameTemplateFolder);
   const arrangeTemplateFolders = useAppStore(s => s.arrangeTemplateFolders);
   const arrangeTemplates = useAppStore(s => s.arrangeTemplates);
   const setImportOpen = useAppStore(s => s.setImportOpen);
@@ -80,15 +66,16 @@ export function TemplatesList() {
   const [drop, setDrop] = useState<Drop | null>(null);
 
   const folderPaths = useMemo(() => templateFolders.map(f => f.path), [templateFolders]);
+  const filtering = filter.trim() !== '';
 
-  const groups = useMemo(() => {
+  const tree = useMemo(() => {
     const q = filter.trim().toLowerCase();
     const visible = q
       ? templates.filter(t => `${t.folder} ${t.name} ${t.request.method} ${t.request.url}`.toLowerCase().includes(q))
       : templates;
-    const all = groupByFolder(visible, folderPaths);
+    const built = buildFolderTree(visible, folderPaths);
     // While filtering, hide folders with no match.
-    return q ? all.filter(([, list]) => list.length > 0) : all;
+    return q ? pruneEmptyFolders(built) : built;
   }, [templates, folderPaths, filter]);
 
   const toggle = (folder: string) =>
@@ -96,6 +83,15 @@ export function TemplatesList() {
       const next = new Set(prev);
       if (next.has(folder)) next.delete(folder);
       else next.add(folder);
+      return next;
+    });
+
+  /** Open a folder so a drop into it is visible straight away. */
+  const expand = (folder: string) =>
+    setCollapsed(prev => {
+      if (!prev.has(folder)) return prev;
+      const next = new Set(prev);
+      next.delete(folder);
       return next;
     });
 
@@ -114,8 +110,12 @@ export function TemplatesList() {
     if (ok) await deleteTemplateFolder(row.id);
   };
 
-  /** Move a template into `folder`, directly before `beforeId` (or to the end). */
-  const moveTemplate = (id: string, folder: string, beforeId: string | null) => {
+  /** Move a template into `folder`, next to `target` (or to the end). */
+  const moveTemplate = (
+    id: string,
+    folder: string,
+    target: { id: string; edge: 'before' | 'after' } | null,
+  ) => {
     const moved = templates.find(t => t.id === id);
     if (!moved) return;
     const byFolder = new Map<string, Template[]>();
@@ -126,14 +126,28 @@ export function TemplatesList() {
       byFolder.set(t.folder, list);
     }
     const dest = byFolder.get(folder) ?? [];
-    const at = beforeId ? dest.findIndex(t => t.id === beforeId) : -1;
-    dest.splice(at < 0 ? dest.length : at, 0, { ...moved, folder });
+    const at = target ? dest.findIndex(t => t.id === target.id) : -1;
+    const index = at < 0 ? dest.length : target?.edge === 'after' ? at + 1 : at;
+    dest.splice(index, 0, { ...moved, folder });
     byFolder.set(folder, dest);
     const items: TemplateOrderInput[] = [];
     for (const [path, list] of byFolder) {
       list.forEach((t, i) => items.push({ id: t.id, folder: path, sort_order: i }));
     }
     void arrangeTemplates(items);
+  };
+
+  /** Move a folder (with its subfolders) to `newPath` and put it at `placement`. */
+  const moveFolder = async (
+    fromPath: string,
+    newPath: string,
+    placement: { parent: string } | { target: string; edge: 'before' | 'after' },
+  ) => {
+    const row = templateFolders.find(f => f.path === fromPath);
+    if (!row) return;
+    const paths = moveFolderInOrder(folderPaths, fromPath, newPath, placement);
+    if (newPath !== fromPath && !(await renameTemplateFolder(row.id, newPath))) return;
+    await arrangeTemplateFolders(paths);
   };
 
   const finishDrag = () => {
@@ -143,19 +157,34 @@ export function TemplatesList() {
 
   const dropTemplate = (target: Template, edge: 'before' | 'after') => {
     if (drag?.kind !== 'template' || drag.id === target.id) return finishDrag();
-    moveTemplate(drag.id, target.folder, edge === 'before' ? target.id : null);
+    moveTemplate(drag.id, target.folder, { id: target.id, edge });
     finishDrag();
   };
 
   const dropIntoFolder = (folder: string) => {
     if (drag?.kind !== 'template') return finishDrag();
+    expand(folder);
     moveTemplate(drag.id, folder, null);
     finishDrag();
   };
 
-  const dropFolder = (target: string, edge: 'before' | 'after') => {
+  /** Dropped on the middle of a folder header: nest it there. */
+  const dropFolderInto = (target: string) => {
+    if (drag?.kind !== 'folder') return finishDrag();
+    if (drag.path === target || isSameOrInsideFolder(target, drag.path)) return finishDrag();
+    void moveFolder(drag.path, `${target} / ${folderName(drag.path)}`, { parent: target });
+    expand(target);
+    finishDrag();
+  };
+
+  /** Dropped on a folder header's edge: reorder it next to that folder. */
+  const dropFolderBeside = (target: string, edge: 'before' | 'after') => {
     if (drag?.kind !== 'folder' || drag.path === target) return finishDrag();
-    void arrangeTemplateFolders(moveId(folderPaths, drag.path, target, edge === 'after'));
+    if (isSameOrInsideFolder(target, drag.path)) return finishDrag();
+    const parent = folderParent(target);
+    const newPath = parent ? `${parent} / ${folderName(drag.path)}` : folderName(drag.path);
+    void moveFolder(drag.path, newPath, { target, edge });
+    expand(parent);
     finishDrag();
   };
 
@@ -205,7 +234,7 @@ export function TemplatesList() {
     ];
   };
 
-  const renderTemplate = (t: Template) => {
+  const renderTemplate = (t: Template, depth: number) => {
     const sameDrag = drag?.kind === 'template' && drag.id !== t.id;
     const edge: DropEdge = drop?.kind === 'template' && drop.id === t.id && sameDrag ? drop.edge : null;
     return (
@@ -232,7 +261,9 @@ export function TemplatesList() {
         onDragLeave={() => setDrop(prev => (prev?.kind === 'template' && prev.id === t.id ? null : prev))}
         onDrop={e => {
           e.preventDefault();
-          if (drop?.kind === 'template' && drop.id === t.id) dropTemplate(t, drop.edge);
+          // The zone is read from the event, so a drop never depends on a
+          // previous dragover render having committed.
+          dropTemplate(t, dropEdgeAt(e));
         }}
         className={`rounded-md ${dropEdgeClass(edge)} ${drag?.kind === 'template' && drag.id === t.id ? 'opacity-40' : ''}`}
       >
@@ -243,8 +274,9 @@ export function TemplatesList() {
             e.stopPropagation();
             setMenu({ x: e.clientX, y: e.clientY, kind: 'template', template: t });
           }}
-          className="group w-[calc(100%-0.25rem)] ml-1 flex items-center gap-1.5 pl-2 pr-1 py-1 rounded-md text-left hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
-          title={`${t.request.method} ${t.request.url}\nClick to open a new tab`}
+          style={{ paddingLeft: `${(depth + 1) * 12 + 6}px` }}
+          className="group w-[calc(100%-0.25rem)] ml-1 flex items-center gap-1.5 pr-1 py-1 rounded-md text-left hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+          title={`${t.request.method} ${t.request.url}\n${t.folder || 'No folder'}\nClick to open a new tab`}
         >
           <span className="shrink-0 w-9 text-[9px] font-bold text-right" style={{ color: METHOD_COLORS[t.request.method] }}>
             {t.request.method === 'DELETE' ? 'DEL' : t.request.method === 'OPTIONS' ? 'OPT' : t.request.method}
@@ -271,92 +303,122 @@ export function TemplatesList() {
     );
   };
 
-  const renderFolder = (folder: string, list: Template[]) => {
-    const isCollapsed = collapsed.has(folder) && !filter;
-    const folderDrag = drag?.kind === 'folder' && drag.path === folder;
+  const renderFolder = (node: FolderNode) => {
+    const path = node.path;
+    const isRootBucket = path === '';
+    const isCollapsed = collapsed.has(path) && !filtering;
+    const folderDrag = drag?.kind === 'folder' && drag.path === path;
     const edge: DropEdge =
-      drag?.kind === 'folder' && drop?.kind === 'folder' && drop.path === folder && drag.path !== folder
+      drag?.kind === 'folder' && drop?.kind === 'folder' && drop.path === path && drag.path !== path
         ? drop.edge
         : null;
-    const highlightIntoFolder = drag?.kind === 'template' && drop?.kind === 'intoFolder' && drop.folder === folder;
-    const folderName = folder || 'No folder';
+    const templateHighlight = drag?.kind === 'template' && drop?.kind === 'intoFolder' && drop.folder === path;
+    const folderHighlight = drag?.kind === 'folder' && drop?.kind === 'folderInto' && drop.folder === path;
+    const label = isRootBucket ? 'No folder' : node.name;
     return (
-      <div key={folder || '__none'}>
+      <div key={path || '__none'}>
         <div
           role="button"
           tabIndex={0}
           aria-expanded={!isCollapsed}
-          draggable={folder !== ''}
+          draggable={!isRootBucket}
           onDragStart={e => {
-            if (folder === '') return;
+            if (isRootBucket) return;
             e.dataTransfer.effectAllowed = 'move';
-            e.dataTransfer.setData('text/plain', folder);
-            setDrag({ kind: 'folder', path: folder });
+            e.dataTransfer.setData('text/plain', path);
+            setDrag({ kind: 'folder', path });
           }}
           onDragEnd={finishDrag}
           onDragOver={e => {
-            if (drag?.kind === 'folder' && folder !== '' && drag.path !== folder) {
+            if (drag?.kind === 'folder' && !isRootBucket && drag.path !== path) {
+              // A folder cannot move into itself or its own subfolders.
+              if (isSameOrInsideFolder(path, drag.path)) return;
               e.preventDefault();
               e.dataTransfer.dropEffect = 'move';
-              const next = dropEdgeAt(e);
-              setDrop(prev =>
-                prev?.kind === 'folder' && prev.path === folder && prev.edge === next
-                  ? prev
-                  : { kind: 'folder', path: folder, edge: next },
-              );
+              const zone: DropZone = dropZoneAt(e);
+              if (zone === 'inside') {
+                setDrop(prev =>
+                  prev?.kind === 'folderInto' && prev.folder === path ? prev : { kind: 'folderInto', folder: path },
+                );
+              } else {
+                setDrop(prev =>
+                  prev?.kind === 'folder' && prev.path === path && prev.edge === zone
+                    ? prev
+                    : { kind: 'folder', path, edge: zone },
+                );
+              }
             } else if (drag?.kind === 'template') {
               e.preventDefault();
               e.dataTransfer.dropEffect = 'move';
-              setDrop(prev => (prev?.kind === 'intoFolder' && prev.folder === folder ? prev : { kind: 'intoFolder', folder }));
+              setDrop(prev => (prev?.kind === 'intoFolder' && prev.folder === path ? prev : { kind: 'intoFolder', folder: path }));
             }
           }}
           onDragLeave={() =>
             setDrop(prev => {
-              if (prev?.kind === 'folder' && prev.path === folder) return null;
-              if (prev?.kind === 'intoFolder' && prev.folder === folder) return null;
+              if (prev?.kind === 'folder' && prev.path === path) return null;
+              if (prev?.kind === 'folderInto' && prev.folder === path) return null;
+              if (prev?.kind === 'intoFolder' && prev.folder === path) return null;
               return prev;
             })
           }
           onDrop={e => {
-            e.preventDefault();
-            if (drag?.kind === 'template' && drop?.kind === 'intoFolder' && drop.folder === folder) {
-              dropIntoFolder(folder);
-            } else if (drag?.kind === 'folder' && drop?.kind === 'folder' && drop.path === folder) {
-              dropFolder(folder, drop.edge);
+            if (drag?.kind === 'template') {
+              e.preventDefault();
+              dropIntoFolder(path);
+            } else if (drag?.kind === 'folder' && drag.path !== path) {
+              e.preventDefault();
+              const zone = dropZoneAt(e);
+              if (zone === 'inside') dropFolderInto(path);
+              else dropFolderBeside(path, zone);
             }
           }}
-          onClick={() => toggle(folder)}
+          onClick={() => toggle(path)}
           onKeyDown={e => {
             if (e.key === 'Enter' || e.key === ' ') {
               e.preventDefault();
-              toggle(folder);
+              toggle(path);
             }
           }}
           onContextMenu={e => {
             e.preventDefault();
             e.stopPropagation();
             setMenu(
-              folder === ''
+              isRootBucket
                 ? { x: e.clientX, y: e.clientY, kind: 'background' }
-                : { x: e.clientX, y: e.clientY, kind: 'folder', folder },
+                : { x: e.clientX, y: e.clientY, kind: 'folder', folder: path },
             );
           }}
-          className={`w-full flex items-center gap-1 pl-1.5 pr-2 py-1 mt-1 text-left text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)] hover:text-[var(--text-secondary)] rounded-md ${dropEdgeClass(edge)} ${
-            highlightIntoFolder ? 'bg-[var(--bg-active)] text-[var(--text-primary)]' : ''
+          style={{ paddingLeft: `${node.depth * 12 + 6}px` }}
+          className={`w-full flex items-center gap-1 pr-2 py-1 mt-1 text-left text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)] hover:text-[var(--text-secondary)] rounded-md ${dropEdgeClass(edge)} ${
+            templateHighlight || folderHighlight ? 'bg-[var(--bg-active)] text-[var(--text-primary)]' : ''
           } ${folderDrag ? 'opacity-40' : ''}`}
         >
           <ChevronRight className={`w-3 h-3 shrink-0 transition-transform ${isCollapsed ? '' : 'rotate-90'}`} />
-          <span className="truncate">{folderName}</span>
-          <span className="ml-auto font-normal normal-case tracking-normal">{list.length}</span>
+          <span className="truncate" title={isRootBucket ? 'Templates that are not in a folder' : path}>
+            {label}
+          </span>
+          <span
+            className="ml-auto font-normal normal-case tracking-normal"
+            title={
+              node.templates.length === node.total
+                ? `${node.total} template${node.total === 1 ? '' : 's'}`
+                : `${node.templates.length} here, ${node.total} with subfolders`
+            }
+          >
+            {node.total}
+          </span>
         </div>
-        {!isCollapsed &&
-          (list.length > 0 ? (
-            list.map(renderTemplate)
-          ) : (
-            !filter && (
-              <p className="pl-6 py-1 text-[11px] text-[var(--text-muted)] italic">Empty folder — drop a template here</p>
-            )
-          ))}
+        {!isCollapsed && (
+          <>
+            {node.children.map(renderFolder)}
+            {node.templates.map(t => renderTemplate(t, node.depth))}
+            {node.total === 0 && !filtering && (
+              <p style={{ paddingLeft: `${(node.depth + 1) * 12 + 6}px` }} className="py-1 text-[11px] text-[var(--text-muted)] italic">
+                Empty folder — drop a template here
+              </p>
+            )}
+          </>
+        )}
       </div>
     );
   };
@@ -384,7 +446,7 @@ export function TemplatesList() {
         </div>
       </div>
       <div className="flex-1 overflow-y-auto pb-2 min-h-[80px]">
-        {groups.map(([folder, list]) => renderFolder(folder, list))}
+        {tree.map(renderFolder)}
         {templates.length === 0 && templateFolders.length === 0 && (
           <div className="flex flex-col items-center justify-center p-6 text-center gap-2">
             <p className="text-[var(--text-muted)] text-sm">No templates yet</p>
@@ -407,18 +469,33 @@ export function TemplatesList() {
             </div>
           </div>
         )}
-        {templates.length > 0 && groups.length === 0 && (
+        {templates.length > 0 && tree.length === 0 && (
           <p className="p-4 text-center text-xs text-[var(--text-muted)]">No templates match “{filter}”.</p>
         )}
       </div>
       {menu && <ContextMenu x={menu.x} y={menu.y} items={items(menu)} onClose={() => setMenu(null)} />}
       {editing && <TemplateEditDialog template={editing} onClose={() => setEditing(null)} />}
-      {folderDialog && <FolderDialog state={folderDialog} onClose={() => setFolderDialog(null)} />}
+      {folderDialog && (
+        <FolderDialog
+          state={folderDialog}
+          onClose={() => setFolderDialog(null)}
+          onSaved={saved => expand(folderParent(saved))}
+        />
+      )}
     </div>
   );
 }
 
-function FolderDialog({ state, onClose }: { state: FolderDialogState; onClose: () => void }) {
+function FolderDialog({
+  state,
+  onClose,
+  onSaved,
+}: {
+  state: FolderDialogState;
+  onClose: () => void;
+  /** Called with the saved path so its parent can be expanded. */
+  onSaved?: (path: string) => void;
+}) {
   const createTemplateFolder = useAppStore(s => s.createTemplateFolder);
   const renameTemplateFolder = useAppStore(s => s.renameTemplateFolder);
   const [path, setPath] = useState(state.path);
@@ -431,6 +508,7 @@ function FolderDialog({ state, onClose }: { state: FolderDialogState; onClose: (
     if (state.mode === 'create') await createTemplateFolder(clean);
     else await renameTemplateFolder(state.id, clean);
     setSaving(false);
+    onSaved?.(clean);
     onClose();
   };
 

@@ -33,13 +33,13 @@ It keeps Larik's model of **workspaces → tabs**, but a new tab starts from a *
    - The body's JSON check accepts placeholders in both positions. If the body is no longer valid JSON once values are filled in, Send shows a warning (and still sends).
 6. **Tab names come from the template plus a key value,** e.g. `Get contact · 10045`. The key value is the first required param that has a value, or else the first param that has one. Renaming a tab by hand (double-click) pins its title.
 7. **The template picker is a command palette.** Ctrl+T / Ctrl+N → type to filter → Enter. **Blank request** is always the first option.
-8. **No collection tree.** Templates are grouped by `folder` (a path such as `Contacts / Admin`) in the picker and in the sidebar's Templates view. Folders themselves are rows, so an empty folder can exist, be renamed and be reordered; in the Templates view drag a template to move it between folders, drag a folder header to reorder folders, and right-click anywhere for **New folder**.
+8. **Folders are a tree.** `folder` is a path (`Contacts / Admin` means `Admin` inside `Contacts`). The sidebar's Templates view renders it nested, with a count per folder including subfolders; the picker lists templates flat and matches the full path. Folders are rows, so an empty folder can exist, be renamed, reordered and nested: drag a template onto a folder header to move it, drag a folder header by its edges to reorder it, drop it on another folder's middle to nest it, and right-click anywhere for **New folder**. Deleting a folder requires it to be empty.
 
 ## Import
 
 | Source | Result |
 |---|---|
-| Postman collection v2.0/v2.1 (JSON) | One template per request. Folder = item path. Path variables (`:id`) become params. Collection/folder auth is inherited. Collection variables become an environment. |
+| Postman collection v2.0/v2.1 (JSON) | One template per request. Folder = the full item path (`Internal / Documents`), so nested folders are kept. Path variables (`:id`) become params. Collection/folder auth is inherited. Collection variables become an environment. |
 | Postman environment (JSON) | One environment. `secret` values are kept, but masked in the UI. |
 | OpenAPI 3.x / Swagger 2.0 (JSON or YAML) | One template per operation. Folder = first tag. `{{baseUrl}}` + path, with `{id}` turned into `{{id}}`. Path params and required query/header params become required params; an `enum` makes them dropdowns (left unselected unless the spec declares a default or example). The JSON body is generated from the schema (example → default → enum → type), and required top-level string fields become params. Security schemes map to auth with env vars. An environment named after the API gets `baseUrl` from `servers[0]` plus the auth variables. |
 
@@ -139,7 +139,7 @@ environments/dev.yaml            one file per environment; secret values left ou
 
 - Spaces (create, rename, recolour, delete, switch)
 - Environments (CRUD, active per space, editor modal)
-- Templates (picker, sidebar list grouped by folder, new/rename/delete folder, drag to reorder or move, rename/move/delete template, save/update from tab)
+- Templates (picker, nested folder tree in the sidebar, new/rename/delete folder, nest and reorder by drag, rename/move/delete template, save/update from tab)
 - Tabs (create from template/blank, params form, autosave, rename, pin, drag to reorder, close, restore on restart)
 - Request editor: method + URL bar, Params / Query / Headers / Body / Auth sections
 - Response viewer: status, time, size, pretty body (Monaco), headers

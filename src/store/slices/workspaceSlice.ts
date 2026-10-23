@@ -50,10 +50,11 @@ export interface WorkspaceSlice {
   deleteTemplate: (id: string) => Promise<void>;
 
   createTemplateFolder: (path: string) => Promise<void>;
-  renameTemplateFolder: (id: string, path: string) => Promise<void>;
+  /** False when the rename was rejected (for example a duplicate path). */
+  renameTemplateFolder: (id: string, path: string) => Promise<boolean>;
   deleteTemplateFolder: (id: string) => Promise<void>;
-  /** New folder order, top to bottom. */
-  arrangeTemplateFolders: (paths: string[]) => Promise<void>;
+  /** New folder order, top to bottom. False when it was rejected. */
+  arrangeTemplateFolders: (paths: string[]) => Promise<boolean>;
   /** New folder and position of templates after a drag. */
   arrangeTemplates: (items: TemplateOrderInput[]) => Promise<void>;
 
@@ -305,7 +306,9 @@ export const createWorkspaceSlice: StateCreator<AppState, [], [], WorkspaceSlice
 
     renameTemplateFolder: async (id, path) => {
       const layout = await api.renameTemplateFolder(id, path).catch(fail('Failed to rename folder'));
-      if (layout) applyLayout(layout);
+      if (!layout) return false;
+      applyLayout(layout);
+      return true;
     },
 
     deleteTemplateFolder: async (id) => {
@@ -315,9 +318,11 @@ export const createWorkspaceSlice: StateCreator<AppState, [], [], WorkspaceSlice
 
     arrangeTemplateFolders: async (paths) => {
       const spaceId = get().activeSpaceId;
-      if (!spaceId) return;
+      if (!spaceId) return false;
       const layout = await api.arrangeTemplateFolders(spaceId, paths).catch(fail('Failed to reorder folders'));
-      if (layout) applyLayout(layout);
+      if (!layout) return false;
+      applyLayout(layout);
+      return true;
     },
 
     arrangeTemplates: async (items) => {
