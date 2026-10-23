@@ -338,3 +338,48 @@ describe('Postman scripts', () => {
     expect(result.warnings.join(' ')).toMatch(/require\(\)/);
   });
 });
+
+describe('Postman nested folders', () => {
+  it('keeps the full ancestor path for requests in subfolders', () => {
+    const result = importDocument(
+      JSON.stringify({
+        info: { name: 'Nested', schema: 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json' },
+        item: [
+          {
+            name: 'Internal',
+            item: [
+              {
+                name: 'Documents',
+                item: [{ name: 'List documents', request: { method: 'GET', url: '{{baseUrl}}/documents' } }],
+              },
+              {
+                name: 'Payments',
+                item: [{ name: 'Create payment', request: { method: 'POST', url: '{{baseUrl}}/payments' } }],
+              },
+            ],
+          },
+          {
+            name: 'External',
+            item: [
+              {
+                name: 'Offers',
+                item: [{ name: 'List offers', request: { method: 'GET', url: '{{baseUrl}}/offers' } }],
+              },
+              {
+                name: 'Products',
+                item: [{ name: 'List products', request: { method: 'GET', url: '{{baseUrl}}/products' } }],
+              },
+            ],
+          },
+        ],
+      }),
+    );
+
+    expect(result.templates.map(t => [t.folder, t.name])).toEqual([
+      ['Internal / Documents', 'List documents'],
+      ['Internal / Payments', 'Create payment'],
+      ['External / Offers', 'List offers'],
+      ['External / Products', 'List products'],
+    ]);
+  });
+});

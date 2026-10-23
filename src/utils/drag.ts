@@ -25,3 +25,17 @@ export function dropEdgeAt(event: React.DragEvent<HTMLElement>): 'before' | 'aft
   const rect = event.currentTarget.getBoundingClientRect();
   return event.clientY > rect.top + rect.height / 2 ? 'after' : 'before';
 }
+
+/**
+ * Where the pointer is on a folder row: the outer quarters reorder next to it,
+ * the wide middle nests the dragged folder inside it.
+ */
+export type DropZone = 'before' | 'inside' | 'after';
+
+export function dropZoneAt(event: React.DragEvent<HTMLElement>): DropZone {
+  const rect = event.currentTarget.getBoundingClientRect();
+  const y = (event.clientY - rect.top) / rect.height;
+  if (y < 0.25) return 'before';
+  if (y > 0.75) return 'after';
+  return 'inside';
+}

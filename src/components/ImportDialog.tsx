@@ -1,11 +1,11 @@
 // Import a Postman collection / environment or an OpenAPI spec into the active space.
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { AlertTriangle, FileJson, FolderOpen } from 'lucide-react';
 import * as api from '../api';
 import { useAppStore } from '../store';
 import { importDocument, type ImportResult } from '../utils/importers';
-import { groupByFolder } from './TemplatesList';
+import { buildFolderTree, type FolderNode } from '../utils/folderTree';
 import { GhostButton, Modal, PrimaryButton } from './Modal';
 import type { Template } from '../types';
 
@@ -41,6 +41,15 @@ export function ImportDialog() {
       return { error: (e as Error).message };
     }
   }, [text]);
+
+  const result = parsed.result;
+  // Preview rows follow the same folder tree the sidebar will show.
+  const previewTemplates = useMemo(
+    () =>
+      (result?.templates ?? []).map((t, i) => ({ ...t, id: String(i), sort_order: i }) as unknown as Template),
+    [result],
+  );
+  const tree = useMemo(() => buildFolderTree(previewTemplates), [previewTemplates]);
 
   if (!open) return null;
   const close = () => setOpen(false);
@@ -79,9 +88,32 @@ export function ImportDialog() {
     }
   };
 
-  const result = parsed.result;
-  // Group preview rows with the same helper as the sidebar.
-  const groups = result ? groupByFolder(result.templates.map((t, i) => ({ ...t, id: String(i), sort_order: i }) as unknown as Template)) : [];
+  /** Folder headers and their templates, indented by nesting level. */
+  const previewRows = (nodes: FolderNode[]): ReactNode[] =>
+    nodes.flatMap(node => [
+      <div
+        key={`folder:${node.path}`}
+        style={{ paddingLeft: `${node.depth * 12}px` }}
+        className="text-[var(--text-secondary)] font-medium"
+        title={node.path || undefined}
+      >
+        {node.path === '' ? 'No folder' : node.name}
+      </div>,
+      ...previewRows(node.children),
+      ...node.templates.map(t => (
+        <div
+          key={t.id}
+          style={{ paddingLeft: `${(node.depth + 1) * 12}px` }}
+          className="flex gap-2 text-[var(--text-muted)]"
+        >
+          <span className="w-12 font-mono text-[10px] font-bold">{t.request.method}</span>
+          <span className="truncate">{t.name}</span>
+          {t.request.params.length > 0 && (
+            <span className="ml-auto shrink-0">{t.request.params.map(p => p.name).join(', ')}</span>
+          )}
+        </div>
+      )),
+    ]);
 
   return (
     <Modal
@@ -127,18 +159,7 @@ export function ImportDialog() {
           {result.templates.length > 0 && (
             <div className="rounded-md border border-[var(--border-subtle)] max-h-48 overflow-y-auto px-2 py-1.5 text-[12px]">
               <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)] mb-1">{result.templates.length} templates</div>
-              {groups.map(([folder, list]) => (
-                <div key={folder} className="mb-1">
-                  <div className="text-[var(--text-secondary)] font-medium">{folder || 'No folder'}</div>
-                  {list.map(t => (
-                    <div key={t.id} className="pl-3 flex gap-2 text-[var(--text-muted)]">
-                      <span className="w-12 font-mono text-[10px] font-bold">{t.request.method}</span>
-                      <span className="truncate">{t.name}</span>
-                      {t.request.params.length > 0 && <span className="ml-auto shrink-0">{t.request.params.map(p => p.name).join(', ')}</span>}
-                    </div>
-                  ))}
-                </div>
-              ))}
+              {previewRows(tree)}
             </div>
           )}
 

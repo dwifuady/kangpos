@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { moveId } from './drag';
+import { dropZoneAt, moveId } from './drag';
 
 describe('moveId', () => {
   const ids = ['a', 'b', 'c'];
@@ -28,5 +28,16 @@ describe('moveId', () => {
   it('does not mutate the input', () => {
     moveId(ids, 'a', 'c', true);
     expect(ids).toEqual(['a', 'b', 'c']);
+  });
+});
+
+describe('dropZoneAt', () => {
+  const row = (clientY: number) =>
+    ({ clientY, currentTarget: { getBoundingClientRect: () => ({ top: 100, height: 20 }) } }) as unknown as React.DragEvent<HTMLElement>;
+
+  it('uses the outer quarters to reorder and the middle to nest', () => {
+    expect(dropZoneAt(row(101))).toBe('before');
+    expect(dropZoneAt(row(110))).toBe('inside');
+    expect(dropZoneAt(row(119))).toBe('after');
   });
 });
