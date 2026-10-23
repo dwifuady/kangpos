@@ -218,9 +218,7 @@ function labelled(source: string, code: string): string {
 }
 
 const UNSUPPORTED_SCRIPT_FEATURES: [RegExp, string][] = [
-  [/\brequire\s*\(/, 'Some scripts use require(); KangPos scripts have no libraries (crypto, btoa/atob are built in)'],
   [/\bpm\.cookies\b/, 'Some scripts use pm.cookies, which KangPos does not support'],
-  [/\bpm\.visualizer\b/, 'Some scripts use pm.visualizer, which KangPos does not support'],
   [/\bpm\.vault\b/, 'Some scripts use pm.vault, which KangPos does not support'],
   [/setNextRequest|pm\.execution\./, 'Some scripts control the run order (setNextRequest / pm.execution); KangPos runs one request at a time'],
 ];

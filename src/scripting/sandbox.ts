@@ -6,7 +6,8 @@
 // directly.
 
 import { AssertionError, expect, inspect } from './expect';
-import type { ScriptLog, ScriptTest } from '../types';
+import { createRequire, lodashGlobal } from './modules';
+import type { ScriptLog, ScriptTest, VisualizerOutput } from '../types';
 
 export type ScriptKind = 'before' | 'after';
 
@@ -62,6 +63,8 @@ export interface ScriptHooks {
 export interface ScriptOutcome {
   tests: ScriptTest[];
   logs: ScriptLog[];
+  /** Set by pm.visualizer.set() — rendered as the response's Visualize view. */
+  visualizer?: VisualizerOutput;
   /** Environment changes to persist: value, or null for unset. */
   envChanges: Record<string, string | null>;
   /** pm.variables.set() values; they apply to this send only. */
@@ -71,9 +74,6 @@ export interface ScriptOutcome {
   error?: string;
   durationMs: number;
 }
-
-const UNSUPPORTED_REQUIRE =
-  'require() is not available in KangPos scripts. Built in: pm, console, crypto (Web Crypto), btoa/atob, TextEncoder/TextDecoder.';
 
 function asString(value: unknown): string {
   if (typeof value === 'string') return value;
@@ -171,6 +171,20 @@ function urlWithQuery(url: string, query: SandboxRow[]): string {
   const pairs = query.filter(q => q.enabled && q.key !== '').map(q => `${q.key}=${q.value}`);
   if (pairs.length === 0) return url;
   return `${url}${url.includes('?') ? '&' : '?'}${pairs.join('&')}`;
+}
+
+/** Keep only what can be shown: the visualizer is rendered from plain JSON. */
+function plainValue(value: unknown): unknown {
+  if (value === undefined) return undefined;
+  try {
+    return structuredClone(value);
+  } catch {
+    try {
+      return JSON.parse(JSON.stringify(value));
+    } catch {
+      return String(value);
+    }
+  }
 }
 
 /** Turn what a script passes to pm.sendRequest into an OutgoingRequest. */
@@ -297,6 +311,30 @@ function responseApi(res: SandboxResponse) {
 
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor as new (...args: string[]) => (...args: unknown[]) => Promise<unknown>;
 
+/** Postman APIs KangPos does not implement, with the reason to show when a script reaches for them. */
+const PM_UNAVAILABLE: Record<string, string> = {
+  cookies: 'cookie jars are not implemented',
+  vault: 'secrets are not implemented',
+  execution: 'pm.execution.setNextRequest() is not implemented',
+  getData: 'iteration data is not implemented',
+};
+
+/**
+ * Reading an unimplemented `pm.*` API should explain itself instead of throwing
+ * `Cannot read properties of undefined` from the property after it.
+ */
+function guardPm(api: Record<string, unknown>): Record<string, unknown> {
+  return new Proxy(api, {
+    get(target, property, receiver) {
+      if (typeof property === 'symbol' || property === 'then' || property === 'toJSON' || property in target) {
+        return Reflect.get(target, property, receiver);
+      }
+      const reason = PM_UNAVAILABLE[property];
+      throw new Error(`pm.${property} is not available in KangPos scripts${reason ? ` (${reason})` : ''}.`);
+    },
+  });
+}
+
 export async function executeScript(code: string, ctx: ScriptContext, hooks: ScriptHooks): Promise<ScriptOutcome> {
   const started = Date.now();
   const tests: ScriptTest[] = [];
@@ -305,6 +343,7 @@ export async function executeScript(code: string, ctx: ScriptContext, hooks: Scr
   const locals: Record<string, string> = {};
   const request: SandboxRequest = structuredClone(ctx.request);
   const pending: Promise<unknown>[] = [];
+  let visualizer: VisualizerOutput | undefined;
 
   const log = (level: ScriptLog['level']) => (...args: unknown[]) => logs.push({ level, message: format(args) });
   const console = { log: log('log'), info: log('info'), warn: log('warn'), error: log('error'), debug: log('log') };
@@ -443,7 +482,17 @@ export async function executeScript(code: string, ctx: ScriptContext, hooks: Scr
 
   const response = ctx.response ? responseApi(ctx.response) : undefined;
 
-  const pm = {
+  const visualizerApi = {
+    /** Postman renders the template with Handlebars; KangPos renders it in the response view. */
+    set(template: unknown, data?: unknown) {
+      visualizer = { template: asString(template), data: plainValue(data) };
+    },
+    clear() {
+      visualizer = undefined;
+    },
+  };
+
+  const pm = guardPm({
     info: { requestName: ctx.requestName, eventName: ctx.kind === 'before' ? 'prerequest' : 'test', iteration: 0, iterationCount: 1 },
     environment,
     variables,
@@ -457,7 +506,8 @@ export async function executeScript(code: string, ctx: ScriptContext, hooks: Scr
     test,
     expect,
     sendRequest,
-  };
+    visualizer: visualizerApi,
+  });
 
   // Postman's legacy globals, still common in older collections.
   const legacyTests = new Proxy({} as Record<string, unknown>, {
@@ -474,9 +524,12 @@ export async function executeScript(code: string, ctx: ScriptContext, hooks: Scr
     getGlobalVariable: environment.get,
     setNextRequest: () => logs.push({ level: 'warn', message: 'postman.setNextRequest() is not supported (KangPos runs one request at a time)' }),
   };
-  const require = (name: string) => {
-    throw new Error(`${UNSUPPORTED_REQUIRE} (asked for '${name}')`);
-  };
+  // Postman exposes lodash as the `_` global. Set it for the run so a script can
+  // still declare its own `_` (a parameter would make that a syntax error).
+  const globals = globalThis as Record<string, unknown>;
+  const hadLodash = Object.prototype.hasOwnProperty.call(globals, '_');
+  const previousLodash = globals._;
+  globals._ = lodashGlobal();
 
   let error: string | undefined;
   try {
@@ -486,7 +539,7 @@ export async function executeScript(code: string, ctx: ScriptContext, hooks: Scr
       console,
       postman,
       legacyTests,
-      require,
+      createRequire(),
       ctx.response ? response!.text() : undefined,
       ctx.response ? { code: ctx.response.code, name: ctx.response.status } : undefined,
       ctx.response?.responseTime,
@@ -503,5 +556,8 @@ export async function executeScript(code: string, ctx: ScriptContext, hooks: Scr
     logs.push({ level: 'error', message: error });
   }
 
-  return { tests, logs, envChanges, locals, request, error, durationMs: Date.now() - started };
+  if (hadLodash) globals._ = previousLodash;
+  else delete globals._;
+
+  return { tests, logs, visualizer, envChanges, locals, request, error, durationMs: Date.now() - started };
 }

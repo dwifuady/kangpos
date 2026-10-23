@@ -335,7 +335,30 @@ describe('Postman scripts', () => {
       before: "// From collection \"Hub\"\npm.variables.set('ts', Date.now());\n\nconst CryptoJS = require('crypto-js');",
       after: "// From folder \"Contacts\"\npm.test(\"2xx\", () => pm.response.to.be.success);\n\npm.environment.set('id', pm.response.json().id);",
     });
-    expect(result.warnings.join(' ')).toMatch(/require\(\)/);
+    expect(result.warnings.join(' ')).not.toMatch(/require\(\)|pm\.visualizer/);
+  });
+
+  it('accepts require() and pm.visualizer without warnings', () => {
+    const result = importDocument(
+      JSON.stringify({
+        info: { name: 'Visual' },
+        item: [
+          {
+            name: 'Get items',
+            event: [
+              {
+                listen: 'test',
+                script: {
+                  exec: ["const CryptoJS = require('crypto-js');", "pm.visualizer.set('<p>{{count}}</p>', { count: 2 });"],
+                },
+              },
+            ],
+            request: { method: 'GET', url: 'https://x.test/items' },
+          },
+        ],
+      }),
+    );
+    expect(result.warnings).toEqual([]);
   });
 });
 
