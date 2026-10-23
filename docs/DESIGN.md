@@ -104,12 +104,14 @@ Each request has two optional JavaScript scripts, edited in the **Scripts** sect
 | `pm.response` | code, status, headers, json(), text(), responseTime, responseSize, `to.have.status/header/jsonBody`, `to.be.ok/success/clientError/serverError/json` |
 | `pm.test`, `pm.expect` | sync or async tests; chai-style assertions (equal, eql, a/an, include, property, lengthOf, above/below, match, oneOf, not, ...) |
 | `pm.sendRequest` | callback or `await`; goes through the Rust HTTP client (no CORS) and is logged in the console |
+| `pm.visualizer` | `set(template, data)` renders a Handlebars template in the response's **Visualize** view; `clear()` removes it. Templates run without scripts in a sandboxed frame. |
+| `require` | `crypto-js` (MD5/SHA1/SHA256/SHA512 + HMAC, `enc`), `crypto` (createHash/createHmac/randomBytes/randomUUID/timingSafeEqual), `lodash` (also the `_` global), `moment`, `uuid`, `buffer`, `querystring`, `chai` |
 | also | `console.*`, legacy `postman.setEnvironmentVariable`, `tests["name"] = bool`, `responseBody`, `responseCode` |
 
 - **Order:** before script → `{{placeholders}}` resolved (script locals first) → send → after script. A before-script error means the request is **not sent**.
-- **Sandbox:** each run gets a fresh Web Worker (`src/scripting/worker.ts`). Workers can't reach the app's Tauri bridge, and the worker deletes `fetch`, `XMLHttpRequest`, `WebSocket`, `importScripts`, storage APIs, etc. before running code, so `pm.sendRequest` is the only way out. Each run has a 10 s limit (time waiting on `pm.sendRequest` doesn't count). There's no `require()`; `crypto` (Web Crypto), `btoa`/`atob` and `TextEncoder` are available.
+- **Sandbox:** each run gets a fresh Web Worker (`src/scripting/worker.ts`). Workers can't reach the app's Tauri bridge, and the worker deletes `fetch`, `XMLHttpRequest`, `WebSocket`, `importScripts`, storage APIs, etc. before running code, so `pm.sendRequest` is the only way out. Each run has a 10 s limit (time waiting on `pm.sendRequest` doesn't count). `crypto` (Web Crypto), `btoa`/`atob` and `TextEncoder` are available, and `require()` loads the built-in modules listed above; anything else fails with a message naming what is available.
 - **Results** go on the tab's last response: a **Tests** view (pass/fail, badge `Tests 2/3`) and a **Console** view with output from both scripts.
-- **Postman import** brings scripts across: collection → folder → request, each block labelled `// From collection "X"`. Features KangPos lacks (`require`, `pm.cookies`, `pm.visualizer`, `setNextRequest`, ...) are reported as import warnings.
+- **Postman import** brings scripts across: collection → folder → request, each block labelled `// From collection "X"`. Features KangPos lacks (`pm.cookies`, `pm.vault`, `setNextRequest`, ...) are reported as import warnings.
 - **Trust (folder-synced spaces only):** a script runs without asking if this exact text was approved before. Scripts typed in the app, present when the folder was linked, or imported here are approved automatically. Anything new or changed through the folder (e.g. `git pull`) shows a prompt with the code: run it, trust the whole space, send without scripts, or cancel. Approvals are SHA-256 hashes in local app state, never in the folder.
 
 ## Folder sync (optional, per space)

@@ -164,10 +164,17 @@ export interface ScriptLog {
   message: string;
 }
 
+/** A pm.visualizer.set() template and the data it was given. */
+export interface VisualizerOutput {
+  template: string;
+  data?: unknown;
+}
+
 /** The visible outcome of one script run. */
 export interface ScriptRunInfo {
   tests: ScriptTest[];
   logs: ScriptLog[];
+  visualizer?: VisualizerOutput;
   error?: string;
   durationMs: number;
 }

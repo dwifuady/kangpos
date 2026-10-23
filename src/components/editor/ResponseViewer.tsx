@@ -7,11 +7,12 @@ import type { ScriptLog, ScriptTest, StoredResponse } from '../../types';
 import { formatBytes, formatDuration, languageFor, prettyJson, statusColor } from '../../utils/format';
 import { bytesToBase64, detectPreview, responseBytes, suggestedFileName } from '../../utils/binary';
 import { CodeEditor } from './CodeEditor';
+import { renderTemplate } from '../../scripting/handlebars';
 import { useAppStore } from '../../store';
 
-type View = 'preview' | 'pretty' | 'raw' | 'headers' | 'tests' | 'console';
+type View = 'visualize' | 'preview' | 'pretty' | 'raw' | 'headers' | 'tests' | 'console';
 
-const VIEW_LABEL: Record<View, string> = { preview: 'Preview', pretty: 'Pretty', raw: 'Raw', headers: 'Headers', tests: 'Tests', console: 'Console' };
+const VIEW_LABEL: Record<View, string> = { visualize: 'Visualize', preview: 'Preview', pretty: 'Pretty', raw: 'Raw', headers: 'Headers', tests: 'Tests', console: 'Console' };
 
 const LOG_COLOR: Record<ScriptLog['level'], string> = {
   log: 'text-[var(--text-primary)]',
@@ -52,7 +53,19 @@ export function ResponseViewer({ stored, sending, onCancel, tabId }: { stored: S
   const passed = tests.filter(t => t.passed).length;
   const scriptError = scriptInfo?.before?.error ?? scriptInfo?.after?.error;
 
+  // pm.visualizer.set() output; the template is rendered once per response.
+  const visualizer = scriptInfo?.after?.visualizer ?? scriptInfo?.before?.visualizer;
+  const visualized = useMemo(() => {
+    if (!visualizer) return null;
+    try {
+      return { html: renderTemplate(visualizer.template, visualizer.data) };
+    } catch (e) {
+      return { error: e instanceof Error ? e.message : String(e) };
+    }
+  }, [visualizer]);
+
   const views: View[] = [];
+  if (visualized) views.push('visualize');
   if (response) {
     if (preview) views.push('preview');
     if (body !== null) views.push('pretty', 'raw');
@@ -62,9 +75,11 @@ export function ResponseViewer({ stored, sending, onCancel, tabId }: { stored: S
   if (logs.length > 0) views.push('console');
 
   // Images and PDFs open in Preview; text (including HTML) opens as Pretty.
-  const defaultView: View = !response
-    ? tests.length > 0 ? 'tests' : 'console'
-    : preview && (preview.kind !== 'html' || body === null) ? 'preview' : body !== null ? 'pretty' : 'headers';
+  const defaultView: View = visualized
+    ? 'visualize'
+    : !response
+      ? tests.length > 0 ? 'tests' : 'console'
+      : preview && (preview.kind !== 'html' || body === null) ? 'preview' : body !== null ? 'pretty' : 'headers';
   const [view, setView] = useState<View>(defaultView);
   useEffect(() => setView(defaultView), [stored?.sentAt, tabId]); // eslint-disable-line react-hooks/exhaustive-deps -- reset per response
   const activeView = views.includes(view) ? view : defaultView;
@@ -171,7 +186,7 @@ export function ResponseViewer({ stored, sending, onCancel, tabId }: { stored: S
           ))}
           {response && (
             <>
-              {activeView !== 'preview' && activeView !== 'tests' && activeView !== 'console' && (body !== null || activeView === 'headers') && (
+              {activeView !== 'preview' && activeView !== 'visualize' && activeView !== 'tests' && activeView !== 'console' && (body !== null || activeView === 'headers') && (
                 <button
                   onClick={() => copy(activeView === 'headers' ? response.headers.map(([k, v]) => `${k}: ${v}`).join('\n') : activeView === 'pretty' ? pretty : (body ?? ''))}
                   className="p-1 rounded-md text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]"
@@ -222,6 +237,17 @@ export function ResponseViewer({ stored, sending, onCancel, tabId }: { stored: S
                 </div>
               </div>
             ))}
+          </div>
+        )}
+
+        {activeView === 'visualize' && visualized && (
+          <div className="h-full rounded-md border border-[var(--border-color)] overflow-hidden">
+            {'error' in visualized ? (
+              <div className="p-3 text-[13px] text-red-400 font-mono break-words">Visualizer template error: {visualized.error}</div>
+            ) : (
+              // Visualizer templates are HTML: shown without scripts, forms or navigation.
+              <iframe srcDoc={visualized.html} sandbox="" title="Visualizer" className="w-full h-full bg-white" />
+            )}
           </div>
         )}
 

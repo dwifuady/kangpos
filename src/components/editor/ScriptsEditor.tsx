@@ -10,6 +10,7 @@ const SNIPPETS: Record<Which, { label: string; code: string }[]> = {
     { label: 'Set a variable for this request', code: "pm.variables.set('name', 'value');" },
     { label: 'Add a header', code: "pm.request.headers.upsert({ key: 'X-Request-Id', value: crypto.randomUUID() });" },
     { label: 'Timestamp variable', code: "pm.variables.set('timestamp', new Date().toISOString());" },
+    { label: 'Sign with HMAC-SHA256', code: "const CryptoJS = require('crypto-js');\npm.variables.set('signature', CryptoJS.HmacSHA256(pm.variables.get('body'), pm.variables.get('secret')).toString());" },
     {
       label: 'Get a token first',
       code: [
@@ -29,6 +30,13 @@ const SNIPPETS: Record<Which, { label: string; code: string }[]> = {
     { label: 'Save a value to the environment', code: "pm.environment.set('id', pm.response.json().id);" },
     { label: 'Response time below 1 s', code: "pm.test('Fast enough', () => pm.expect(pm.response.responseTime).to.be.below(1000));" },
     { label: 'Log the response', code: 'console.log(pm.response.json());' },
+    {
+      label: 'Visualize the response',
+      code: [
+        'const items = pm.response.json();',
+        "pm.visualizer.set('<h3>{{title}}</h3><ul>{{#each items}}<li>{{name}}</li>{{/each}}</ul>', { title: 'Items', items });",
+      ].join('\n'),
+    },
   ],
 };
 
@@ -97,8 +105,9 @@ export function ScriptsEditor({ scripts, onChange, tabId, spaceColor }: ScriptsE
         {which === 'before'
           ? 'Runs before {{placeholders}} are filled in, so values you set are used by this request. '
           : 'Runs when the response arrives. Use pm.test for checks and pm.environment.set to keep values for later requests. '}
-        Postman-style API: <span className="font-mono">pm.environment, pm.variables, pm.request, pm.response, pm.test, pm.expect, pm.sendRequest, console.log</span>.
-        Runs in a sandbox with a 10 s limit; no require().
+        Postman-style API: <span className="font-mono">pm.environment, pm.variables, pm.request, pm.response, pm.test, pm.expect, pm.sendRequest, pm.visualizer, console.log</span>.
+        Runs in a sandbox with a 10 s limit. Libraries via <span className="font-mono">require()</span>: crypto-js, crypto, lodash (also{' '}
+        <span className="font-mono">_</span>), moment, uuid, buffer, querystring, chai.
       </p>
     </div>
   );

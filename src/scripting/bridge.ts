@@ -89,5 +89,11 @@ export function applyEnvChanges(vars: EnvVariable[], changes: Record<string, str
 }
 
 export function runInfo(outcome: ScriptOutcome): ScriptRunInfo {
-  return { tests: outcome.tests, logs: outcome.logs, error: outcome.error, durationMs: outcome.durationMs };
+  return {
+    tests: outcome.tests,
+    logs: outcome.logs,
+    visualizer: outcome.visualizer,
+    error: outcome.error,
+    durationMs: outcome.durationMs,
+  };
 }

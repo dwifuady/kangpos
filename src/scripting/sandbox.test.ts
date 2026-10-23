@@ -75,8 +75,8 @@ describe('before scripts', () => {
   });
 
   it('reports errors with a clear message and keeps earlier changes out', async () => {
-    const out = await executeScript(`pm.environment.set('x', 1); const CryptoJS = require('crypto-js');`, ctx(), noNetwork);
-    vexpect(out.error).toMatch(/require\(\) is not available/);
+    const out = await executeScript(`pm.environment.set('x', 1); require('definitely-not-a-module');`, ctx(), noNetwork);
+    vexpect(out.error).toMatch(/require\('definitely-not-a-module'\) is not available/);
     vexpect(out.logs.at(-1)?.level).toBe('error');
   });
 
