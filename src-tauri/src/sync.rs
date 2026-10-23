@@ -390,8 +390,39 @@ fn remove_file(dir: &Path, rel: &str) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Writing (database -> folder)
+/// Remove a folder directory (not its parents) when it is empty. Templates removing
+/// themselves already prune their old parents through `remove_file`.
+fn remove_empty_dir(dir: &Path, rel: &str) {
+    let _ = std::fs::remove_dir(dir.join(rel));
+}
+
+/// Create the folder's directory in the linked folder, if the space has one.
+pub fn ensure_folder_dir(db: &DatabaseManager, space_id: &str, folder: &str) -> SyncResult<()> {
+    let Some(dir) = space_dir(db, space_id)? else {
+        return Ok(());
+    };
+    let segs = folder_dirs(folder);
+    if segs.is_empty() {
+        return Ok(());
+    }
+    let base: PathBuf = segs.iter().map(String::as_str).collect();
+    std::fs::create_dir_all(dir.join(base))?;
+    Ok(())
+}
+
+/// Remove the folder's directory from the linked folder when nothing else lives there.
+pub fn remove_folder_dir(db: &DatabaseManager, space_id: &str, folder: &str) -> SyncResult<()> {
+    let Some(dir) = space_dir(db, space_id)? else {
+        return Ok(());
+    };
+    let segs = folder_dirs(folder);
+    if segs.is_empty() {
+        return Ok(());
+    }
+    let base: PathBuf = segs.iter().map(String::as_str).collect();
+    remove_empty_dir(&dir, &rel_string(&base));
+    Ok(())
+}
 
 fn space_dir(db: &DatabaseManager, space_id: &str) -> SyncResult<Option<PathBuf>> {
     Ok(db.get_space(space_id)?.sync_dir.map(PathBuf::from))
@@ -541,6 +572,7 @@ pub fn remove_environment(db: &DatabaseManager, id: &str) -> SyncResult<()> {
 struct Scan {
     templates: Vec<(String, Map<String, Value>)>,
     environments: Vec<(String, Map<String, Value>)>,
+    folders: Vec<String>,
     workspace: Option<Map<String, Value>>,
     errors: Vec<FileError>,
 }
@@ -559,6 +591,7 @@ fn scan(dir: &Path) -> Scan {
     let mut out = Scan {
         templates: vec![],
         environments: vec![],
+        folders: vec![],
         workspace: None,
         errors: vec![],
     };
@@ -576,6 +609,10 @@ fn scan(dir: &Path) -> Scan {
                 continue; // .git, editor folders, temp files
             }
             if path.is_dir() {
+                let rel = rel_string(path.strip_prefix(dir).unwrap_or(&path));
+                if rel != ENV_DIR {
+                    out.folders.push(folder_path_of(&rel));
+                }
                 stack.push(path);
                 continue;
             }
@@ -599,9 +636,18 @@ fn scan(dir: &Path) -> Scan {
     out
 }
 
+/// `Contacts / Admin` from a relative directory path.
+fn folder_path_of(rel: &str) -> String {
+    rel.split('/')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join(" / ")
+}
+
 fn folder_of(rel: &str) -> String {
     let parts: Vec<&str> = rel.split('/').collect();
-    parts[..parts.len().saturating_sub(1)].join(" / ")
+    folder_path_of(&parts[..parts.len().saturating_sub(1)].join("/"))
 }
 
 fn name_from_file(rel: &str) -> String {
@@ -626,6 +672,41 @@ fn ensure_id(dir: &Path, rel: &str, doc: &mut Map<String, Value>) -> String {
         let _ = write_atomic(&dir.join(rel), &text);
     }
     id
+}
+
+/// Folder rows follow the directory tree: new folders appear, vanished ones go away.
+/// The order set in the sidebar is kept; only new folders are appended.
+fn sync_folders(db: &DatabaseManager, space_id: &str, mut wanted: Vec<String>) -> SyncResult<bool> {
+    wanted.retain(|p| !p.is_empty());
+    wanted.sort();
+    wanted.dedup();
+    let existing = db.list_template_folders(space_id)?;
+    let have: HashSet<&str> = existing.iter().map(|f| f.path.as_str()).collect();
+    let wanted_set: HashSet<&str> = wanted.iter().map(String::as_str).collect();
+    let mut changed = false;
+    {
+        let conn = db.conn();
+        let max: i64 = conn.query_row(
+            "SELECT COALESCE(MAX(sort_order), -1) FROM template_folders WHERE space_id = ?1",
+            [space_id],
+            |r| r.get(0),
+        )?;
+        for (next, path) in (max + 1..).zip(wanted.iter().filter(|p| !have.contains(p.as_str()))) {
+            conn.execute(
+                "INSERT OR IGNORE INTO template_folders (id, space_id, path, sort_order) VALUES (?1, ?2, ?3, ?4)",
+                params![uuid::Uuid::new_v4().to_string(), space_id, path, next],
+            )?;
+            changed = true;
+        }
+        for folder in existing
+            .iter()
+            .filter(|f| !wanted_set.contains(f.path.as_str()))
+        {
+            conn.execute("DELETE FROM template_folders WHERE id = ?1", [&folder.id])?;
+            changed = true;
+        }
+    }
+    Ok(changed)
 }
 
 /// Read the folder into SQLite. Returns whether anything changed, plus file errors.
@@ -733,6 +814,11 @@ pub fn load_from_disk(db: &DatabaseManager, space_id: &str) -> SyncResult<(bool,
         }
     }
     changed |= delete_missing(db, "templates", space_id, &seen, &errored)?;
+
+    // Folders: every directory in the tree (plus the ones templates use) owns a row.
+    let mut wanted = found.folders.clone();
+    wanted.extend(found.templates.iter().map(|(rel, _)| folder_of(rel)));
+    changed |= sync_folders(db, space_id, wanted)?;
 
     // Environments: keep local secret values when the file omits them.
     let mut seen = HashSet::new();
@@ -950,6 +1036,10 @@ pub fn link(db: &DatabaseManager, space_id: &str, path: &str) -> SyncResult<Spac
     }
     for env in db.list_environments(space_id)? {
         write_environment(db, &env.id)?;
+    }
+    // Empty folders are not written by any template, so create their directories too.
+    for folder in db.list_template_folders(space_id)? {
+        ensure_folder_dir(db, space_id, &folder.path)?;
     }
     Ok(space)
 }
@@ -1190,6 +1280,62 @@ mod tests {
         .unwrap()
         .remove(0)
         .id
+    }
+
+    #[test]
+    fn folders_follow_the_directory_tree() {
+        let (db, space, dir) = setup();
+        let tpl = add_template(&db, &space.id, "List", "Inbox");
+        link(&db, &space.id, dir.to_str().unwrap()).unwrap();
+        assert!(dir.join("Inbox/list.yaml").is_file());
+
+        // An empty folder made in the app is a directory on disk and survives a reload.
+        let empty = db
+            .create_template_folder(&space.id, "Later / Someday")
+            .unwrap();
+        ensure_folder_dir(&db, &space.id, &empty.path).unwrap();
+        assert!(dir.join("Later/Someday").is_dir());
+        let (changed, status) = load_from_disk(&db, &space.id).unwrap();
+        assert!(
+            !changed,
+            "our own folder writes should not look like changes"
+        );
+        assert!(status.errors.is_empty(), "{:?}", status.errors);
+
+        // A directory made by hand becomes a folder.
+        std::fs::create_dir_all(dir.join("Handmade")).unwrap();
+        let (changed, _) = load_from_disk(&db, &space.id).unwrap();
+        assert!(changed);
+        assert!(db
+            .list_template_folders(&space.id)
+            .unwrap()
+            .iter()
+            .any(|f| f.path == "Handmade"));
+
+        // Renaming a folder moves its template file and prunes the old directory.
+        let inbox = db
+            .list_template_folders(&space.id)
+            .unwrap()
+            .into_iter()
+            .find(|f| f.path == "Inbox")
+            .unwrap();
+        let rename = db
+            .rename_template_folder(&inbox.id, "Archive / Inbox")
+            .unwrap();
+        for id in &rename.moved_template_ids {
+            write_template(&db, id).unwrap();
+        }
+        ensure_folder_dir(&db, &space.id, &rename.folder.path).unwrap();
+        remove_folder_dir(&db, &space.id, &rename.old_path).unwrap();
+        assert!(dir.join("Archive/Inbox/list.yaml").is_file());
+        assert!(!dir.join("Inbox").exists(), "old folder left behind");
+        assert_eq!(db.get_template(&tpl).unwrap().folder, "Archive / Inbox");
+
+        // Deleting an empty folder removes its directory, never its parent.
+        remove_folder_dir(&db, &space.id, &empty.path).unwrap();
+        assert!(!dir.join("Later/Someday").exists());
+        assert!(dir.join("Later").is_dir());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

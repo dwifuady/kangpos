@@ -6,6 +6,7 @@ export interface MenuItem {
   icon?: ReactNode;
   onClick: () => void;
   danger?: boolean;
+  disabled?: boolean;
   shortcut?: string;
 }
 
@@ -43,11 +44,13 @@ export function ContextMenu({ x, y, items, onClose }: { x: number; y: number; it
           <button
             key={i}
             role="menuitem"
+            disabled={item.disabled}
+            title={item.disabled ? 'Move or delete what is inside first' : undefined}
             onClick={() => {
               onClose();
               item.onClick();
             }}
-            className={`w-full flex items-center gap-2.5 px-3 py-1.5 text-left text-[13px] hover:bg-[var(--bg-hover)] ${
+            className={`w-full flex items-center gap-2.5 px-3 py-1.5 text-left text-[13px] hover:bg-[var(--bg-hover)] disabled:opacity-40 disabled:hover:bg-transparent disabled:cursor-not-allowed ${
               item.danger ? 'text-red-400' : 'text-[var(--text-primary)]'
             }`}
           >

@@ -23,6 +23,8 @@ pub enum StorageError {
     Io(#[from] std::io::Error),
     #[error("Not found: {0}")]
     NotFound(String),
+    #[error("{0}")]
+    Validation(String),
 }
 
 pub type StorageResult<T> = Result<T, StorageError>;
@@ -70,6 +72,35 @@ pub struct Template {
     pub sort_order: i64,
     pub created_at: String,
     pub updated_at: String,
+}
+
+/// A folder in the template sidebar. Templates only store the folder path, so the
+/// folder itself is a row here to keep its order (and empty folders) around.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TemplateFolder {
+    pub id: String,
+    pub space_id: String,
+    pub path: String,
+    pub sort_order: i64,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// New place of one template after a drag.
+#[derive(Debug, Deserialize)]
+pub struct TemplateOrderInput {
+    pub id: String,
+    #[serde(default)]
+    pub folder: String,
+    pub sort_order: i64,
+}
+
+/// What a folder rename changed, so the linked folder on disk can follow.
+#[derive(Debug)]
+pub struct TemplateFolderRename {
+    pub folder: TemplateFolder,
+    pub old_path: String,
+    pub moved_template_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -162,6 +193,53 @@ pub struct DatabaseManager {
 
 fn new_id() -> String {
     uuid::Uuid::new_v4().to_string()
+}
+
+/// Canonical folder path: levels trimmed and joined with " / ", e.g. `Contacts / Admin`.
+/// Backslashes count as separators so hand-typed and imported paths line up.
+pub fn normalize_folder_path(path: &str) -> String {
+    path.replace('\\', "/")
+        .split('/')
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && *s != "." && *s != "..")
+        .collect::<Vec<_>>()
+        .join(" / ")
+}
+
+/// Parent path (`A` for `A / B`), empty for a top-level folder.
+fn folder_parent(path: &str) -> String {
+    let mut parts: Vec<&str> = path.split(" / ").filter(|s| !s.is_empty()).collect();
+    parts.pop();
+    parts.join(" / ")
+}
+
+/// Make sure a folder row exists for a path templates were placed in, plus its parents
+/// (`A` for `A / B`), so the tree stays consistent.
+fn ensure_folder_row(conn: &Connection, space_id: &str, path: &str) -> StorageResult<()> {
+    let parts: Vec<&str> = path.split(" / ").filter(|s| !s.is_empty()).collect();
+    for i in 1..=parts.len() {
+        let current = parts[..i].join(" / ");
+        let exists: Option<String> = conn
+            .query_row(
+                "SELECT id FROM template_folders WHERE space_id = ?1 AND path = ?2",
+                params![space_id, current],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if exists.is_some() {
+            continue;
+        }
+        let next: i64 = conn.query_row(
+            "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM template_folders WHERE space_id = ?1",
+            [space_id],
+            |r| r.get(0),
+        )?;
+        conn.execute(
+            "INSERT INTO template_folders (id, space_id, path, sort_order) VALUES (?1, ?2, ?3, ?4)",
+            params![new_id(), space_id, current, next],
+        )?;
+    }
+    Ok(())
 }
 
 fn parse_json(text: String) -> Value {
@@ -296,6 +374,17 @@ impl DatabaseManager {
                 FOREIGN KEY (space_id) REFERENCES spaces(id) ON DELETE CASCADE
             );
 
+            -- Folders are paths on templates; this table only owns their order.
+            CREATE TABLE IF NOT EXISTS template_folders (
+                id TEXT PRIMARY KEY,
+                space_id TEXT NOT NULL,
+                path TEXT NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (space_id) REFERENCES spaces(id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS app_state (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL,
@@ -304,6 +393,7 @@ impl DatabaseManager {
 
             CREATE INDEX IF NOT EXISTS idx_environments_space ON environments(space_id);
             CREATE INDEX IF NOT EXISTS idx_templates_space ON templates(space_id);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_template_folders_path ON template_folders(space_id, path);
             CREATE INDEX IF NOT EXISTS idx_tabs_space ON tabs(space_id);
         "#,
         )?;
@@ -543,13 +633,15 @@ impl DatabaseManager {
             let tx = conn.transaction()?;
             for (i, input) in inputs.iter().enumerate() {
                 let id = new_id();
+                let folder = normalize_folder_path(&input.folder);
+                ensure_folder_row(&tx, &input.space_id, &folder)?;
                 tx.execute(
                     "INSERT INTO templates (id, space_id, name, folder, request, sort_order) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                     params![
                         id,
                         input.space_id,
                         input.name,
-                        input.folder,
+                        folder,
                         serde_json::to_string(&input.request)?,
                         i as i64
                     ],
@@ -563,29 +655,40 @@ impl DatabaseManager {
 
     pub fn update_template(&self, id: &str, input: UpdateTemplateInput) -> StorageResult<Template> {
         {
-            let conn = self.connection.lock();
+            let mut conn = self.connection.lock();
+            let tx = conn.transaction()?;
             if let Some(name) = &input.name {
-                conn.execute(
+                tx.execute(
                     "UPDATE templates SET name = ?1 WHERE id = ?2",
                     params![name, id],
                 )?;
             }
             if let Some(folder) = &input.folder {
-                conn.execute(
+                let folder = normalize_folder_path(folder);
+                let space_id: Option<String> = tx
+                    .query_row("SELECT space_id FROM templates WHERE id = ?1", [id], |r| {
+                        r.get(0)
+                    })
+                    .optional()?;
+                if let Some(space_id) = space_id {
+                    ensure_folder_row(&tx, &space_id, &folder)?;
+                }
+                tx.execute(
                     "UPDATE templates SET folder = ?1 WHERE id = ?2",
                     params![folder, id],
                 )?;
             }
             if let Some(request) = &input.request {
-                conn.execute(
+                tx.execute(
                     "UPDATE templates SET request = ?1 WHERE id = ?2",
                     params![serde_json::to_string(request)?, id],
                 )?;
             }
-            conn.execute(
+            tx.execute(
                 "UPDATE templates SET updated_at = datetime('now') WHERE id = ?1",
                 [id],
             )?;
+            tx.commit()?;
         }
         self.get_template(id)
     }
@@ -593,6 +696,279 @@ impl DatabaseManager {
     pub fn delete_template(&self, id: &str) -> StorageResult<()> {
         let conn = self.connection.lock();
         conn.execute("DELETE FROM templates WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    // ---- Template folders ----
+
+    fn row_to_template_folder(row: &Row) -> rusqlite::Result<TemplateFolder> {
+        Ok(TemplateFolder {
+            id: row.get("id")?,
+            space_id: row.get("space_id")?,
+            path: row.get("path")?,
+            sort_order: row.get("sort_order")?,
+            created_at: row.get("created_at")?,
+            updated_at: row.get("updated_at")?,
+        })
+    }
+
+    pub fn list_template_folders(&self, space_id: &str) -> StorageResult<Vec<TemplateFolder>> {
+        let conn = self.connection.lock();
+        let mut stmt = conn.prepare(
+            "SELECT * FROM template_folders WHERE space_id = ?1 ORDER BY sort_order, path",
+        )?;
+        let rows = stmt.query_map([space_id], Self::row_to_template_folder)?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    fn get_template_folder(&self, id: &str) -> StorageResult<TemplateFolder> {
+        let conn = self.connection.lock();
+        conn.query_row(
+            "SELECT * FROM template_folders WHERE id = ?1",
+            [id],
+            Self::row_to_template_folder,
+        )
+        .optional()?
+        .ok_or_else(|| StorageError::NotFound(format!("template folder {id}")))
+    }
+
+    pub fn create_template_folder(
+        &self,
+        space_id: &str,
+        path: &str,
+    ) -> StorageResult<TemplateFolder> {
+        let path = normalize_folder_path(path);
+        if path.is_empty() {
+            return Err(StorageError::Validation("Enter a folder name".into()));
+        }
+        let id = {
+            let mut conn = self.connection.lock();
+            let tx = conn.transaction()?;
+            let taken: Option<String> = tx
+                .query_row(
+                    "SELECT id FROM template_folders WHERE space_id = ?1 AND path = ?2",
+                    params![space_id, path],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            if taken.is_some() {
+                return Err(StorageError::Validation(format!(
+                    "Folder \"{path}\" already exists"
+                )));
+            }
+            ensure_folder_row(&tx, space_id, &path)?;
+            let id: String = tx.query_row(
+                "SELECT id FROM template_folders WHERE space_id = ?1 AND path = ?2",
+                params![space_id, path],
+                |r| r.get(0),
+            )?;
+            tx.commit()?;
+            id
+        };
+        self.get_template_folder(&id)
+    }
+
+    /// Rename a folder (and with it its subfolders), moving its templates along.
+    pub fn rename_template_folder(
+        &self,
+        id: &str,
+        path: &str,
+    ) -> StorageResult<TemplateFolderRename> {
+        let new_path = normalize_folder_path(path);
+        if new_path.is_empty() {
+            return Err(StorageError::Validation("Enter a folder name".into()));
+        }
+        let mut conn = self.connection.lock();
+        let (space_id, old_path): (String, String) = conn
+            .query_row(
+                "SELECT space_id, path FROM template_folders WHERE id = ?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?
+            .ok_or_else(|| StorageError::NotFound(format!("template folder {id}")))?;
+        if new_path == old_path {
+            drop(conn);
+            return Ok(TemplateFolderRename {
+                folder: self.get_template_folder(id)?,
+                old_path,
+                moved_template_ids: vec![],
+            });
+        }
+        if new_path.starts_with(&format!("{old_path} / ")) {
+            return Err(StorageError::Validation(
+                "A folder cannot be moved inside itself".into(),
+            ));
+        }
+
+        let prefix = format!("{old_path} / ");
+        let move_path = |from: &str| format!("{new_path}{}", &from[old_path.len()..]);
+
+        let folders: Vec<(String, String)> = {
+            let mut stmt =
+                conn.prepare("SELECT id, path FROM template_folders WHERE space_id = ?1")?;
+            let rows = stmt.query_map([&space_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            rows.collect::<Result<_, _>>()?
+        };
+        let affected: Vec<(String, String)> = folders
+            .iter()
+            .filter(|(_, p)| *p == old_path || p.starts_with(&prefix))
+            .map(|(fid, p)| (fid.clone(), move_path(p)))
+            .collect();
+        let moved_ids: std::collections::HashSet<&str> =
+            affected.iter().map(|(fid, _)| fid.as_str()).collect();
+        let new_paths: std::collections::HashSet<&str> =
+            affected.iter().map(|(_, p)| p.as_str()).collect();
+        for (fid, p) in folders.iter() {
+            if !moved_ids.contains(fid.as_str()) && new_paths.contains(p.as_str()) {
+                return Err(StorageError::Validation(format!(
+                    "A folder named \"{p}\" already exists"
+                )));
+            }
+        }
+
+        let templates: Vec<(String, String)> = {
+            let mut stmt = conn.prepare("SELECT id, folder FROM templates WHERE space_id = ?1")?;
+            let rows = stmt.query_map([&space_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            rows.collect::<Result<_, _>>()?
+        };
+        let moved_templates: Vec<(String, String)> = templates
+            .iter()
+            .filter(|(_, f)| *f == old_path || f.starts_with(&prefix))
+            .map(|(tid, f)| (tid.clone(), move_path(f)))
+            .collect();
+
+        let tx = conn.transaction()?;
+        ensure_folder_row(&tx, &space_id, &folder_parent(&new_path))?;
+        for (fid, p) in &affected {
+            tx.execute(
+                "UPDATE template_folders SET path = ?1, updated_at = datetime('now') WHERE id = ?2",
+                params![p, fid],
+            )?;
+        }
+        for (tid, f) in &moved_templates {
+            tx.execute(
+                "UPDATE templates SET folder = ?1, updated_at = datetime('now') WHERE id = ?2",
+                params![f, tid],
+            )?;
+        }
+        tx.commit()?;
+        drop(conn);
+
+        Ok(TemplateFolderRename {
+            folder: self.get_template_folder(id)?,
+            old_path,
+            moved_template_ids: moved_templates.into_iter().map(|(id, _)| id).collect(),
+        })
+    }
+
+    /// Delete an empty folder (no templates, no subfolders).
+    pub fn delete_template_folder(&self, id: &str) -> StorageResult<TemplateFolder> {
+        let folder = self.get_template_folder(id)?;
+        let prefix = format!("{} / ", folder.path);
+        let conn = self.connection.lock();
+        let mut stmt = conn.prepare("SELECT path FROM template_folders WHERE space_id = ?1")?;
+        let paths: Vec<String> = stmt
+            .query_map([&folder.space_id], |r| r.get(0))?
+            .collect::<Result<_, _>>()?;
+        if paths.iter().any(|p| p.starts_with(&prefix)) {
+            return Err(StorageError::Validation(format!(
+                "Folder \"{}\" has subfolders; delete them first",
+                folder.path
+            )));
+        }
+        let templates: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM templates WHERE space_id = ?1 AND folder = ?2",
+            params![folder.space_id, folder.path],
+            |r| r.get(0),
+        )?;
+        if templates > 0 {
+            return Err(StorageError::Validation(format!(
+                "Folder \"{}\" still holds templates; move or delete them first",
+                folder.path
+            )));
+        }
+        conn.execute("DELETE FROM template_folders WHERE id = ?1", [id])?;
+        Ok(folder)
+    }
+
+    /// New folder order, top to bottom.
+    pub fn arrange_template_folders(&self, space_id: &str, paths: &[String]) -> StorageResult<()> {
+        let mut conn = self.connection.lock();
+        let tx = conn.transaction()?;
+        for (i, path) in paths.iter().enumerate() {
+            tx.execute(
+                "UPDATE template_folders SET sort_order = ?1, updated_at = datetime('now') WHERE space_id = ?2 AND path = ?3",
+                params![i as i64, space_id, path],
+            )?;
+        }
+        // Folders the caller did not mention keep their order, after the listed ones.
+        let listed: std::collections::HashSet<&str> = paths.iter().map(String::as_str).collect();
+        let rest: Vec<String> = {
+            let mut stmt = tx.prepare(
+                "SELECT path FROM template_folders WHERE space_id = ?1 ORDER BY sort_order, path",
+            )?;
+            let rows = stmt.query_map([space_id], |r| r.get::<_, String>(0))?;
+            rows.collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .filter(|p| !listed.contains(p.as_str()))
+                .collect()
+        };
+        for (i, path) in rest.iter().enumerate() {
+            tx.execute(
+                "UPDATE template_folders SET sort_order = ?1, updated_at = datetime('now') WHERE space_id = ?2 AND path = ?3",
+                params![(paths.len() + i) as i64, space_id, path],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Apply a drag: new folder and position for the templates that moved.
+    /// Returns the ids whose folder changed, so their files can follow.
+    pub fn arrange_templates(
+        &self,
+        space_id: &str,
+        items: &[TemplateOrderInput],
+    ) -> StorageResult<Vec<String>> {
+        let mut conn = self.connection.lock();
+        let tx = conn.transaction()?;
+        let mut moved = Vec::new();
+        for item in items {
+            let folder = normalize_folder_path(&item.folder);
+            let old: Option<String> = tx
+                .query_row(
+                    "SELECT folder FROM templates WHERE id = ?1 AND space_id = ?2",
+                    params![item.id, space_id],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            let Some(old) = old else { continue };
+            if old != folder {
+                moved.push(item.id.clone());
+                ensure_folder_row(&tx, space_id, &folder)?;
+            }
+            tx.execute(
+                "UPDATE templates SET folder = ?1, sort_order = ?2, updated_at = datetime('now') WHERE id = ?3 AND space_id = ?4",
+                params![folder, item.sort_order, item.id, space_id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(moved)
+    }
+
+    /// Persist the sidebar order of tabs (top to bottom).
+    pub fn reorder_tabs(&self, space_id: &str, ids: &[String]) -> StorageResult<()> {
+        let mut conn = self.connection.lock();
+        let tx = conn.transaction()?;
+        let count = ids.len() as i64;
+        for (i, id) in ids.iter().enumerate() {
+            tx.execute(
+                "UPDATE tabs SET sort_order = ?1, updated_at = datetime('now') WHERE id = ?2 AND space_id = ?3",
+                params![count - i as i64, id, space_id],
+            )?;
+        }
+        tx.commit()?;
         Ok(())
     }
 
@@ -838,6 +1214,260 @@ mod tests {
         let small = trim_response(json!({"response": {"body": "ok"}}));
         assert_eq!(small["response"]["body"], "ok");
         assert!(small.get("truncated").is_none());
+    }
+
+    fn add_template(db: &DatabaseManager, space_id: &str, name: &str, folder: &str) -> Template {
+        db.create_templates(vec![CreateTemplateInput {
+            space_id: space_id.into(),
+            name: name.into(),
+            folder: folder.into(),
+            request: json!({"method": "GET", "url": "{{baseUrl}}/x"}),
+        }])
+        .unwrap()
+        .remove(0)
+    }
+
+    #[test]
+    fn folder_paths_are_normalized_and_keep_their_order() {
+        let db = DatabaseManager::in_memory().unwrap();
+        let space = db.create_space("Work", None).unwrap();
+
+        let admin = db
+            .create_template_folder(&space.id, " Contacts /  Admin ")
+            .unwrap();
+        assert_eq!(admin.path, "Contacts / Admin");
+        // The parent came along, so the tree is complete.
+        let paths: Vec<String> = db
+            .list_template_folders(&space.id)
+            .unwrap()
+            .into_iter()
+            .map(|f| f.path)
+            .collect();
+        assert_eq!(paths, vec!["Contacts", "Contacts / Admin"]);
+
+        let err = db
+            .create_template_folder(&space.id, "Contacts / Admin")
+            .unwrap_err();
+        assert!(matches!(err, StorageError::Validation(_)), "{err:?}");
+        let err = db
+            .create_template_folder(&space.id, "Contacts")
+            .unwrap_err();
+        assert!(matches!(err, StorageError::Validation(_)), "{err:?}");
+        let err = db.create_template_folder(&space.id, "   ").unwrap_err();
+        assert!(matches!(err, StorageError::Validation(_)), "{err:?}");
+
+        // A template put into a new folder brings its folder rows along.
+        let tpl = add_template(&db, &space.id, "List", "Teams\\Sales");
+        assert_eq!(tpl.folder, "Teams / Sales");
+
+        let folders = db.list_template_folders(&space.id).unwrap();
+        let paths: Vec<&str> = folders.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(
+            paths,
+            vec!["Contacts", "Contacts / Admin", "Teams", "Teams / Sales"]
+        );
+
+        // Renaming through the template editor keeps its folder row, not a duplicate.
+        db.update_template(
+            &tpl.id,
+            UpdateTemplateInput {
+                name: None,
+                folder: Some("Teams".into()),
+                request: None,
+            },
+        )
+        .unwrap();
+        let paths: Vec<String> = db
+            .list_template_folders(&space.id)
+            .unwrap()
+            .into_iter()
+            .map(|f| f.path)
+            .collect();
+        assert!(paths.contains(&"Teams".to_string()), "{paths:?}");
+        assert_eq!(
+            paths.iter().filter(|p| p.as_str() == "Teams").count(),
+            1,
+            "{paths:?}"
+        );
+        assert!(paths.contains(&"Teams / Sales".to_string()), "{paths:?}");
+        assert_eq!(paths.len(), 4, "{paths:?}");
+        let _ = admin;
+    }
+
+    #[test]
+    fn renaming_a_folder_moves_templates_and_subfolders() {
+        let db = DatabaseManager::in_memory().unwrap();
+        let space = db.create_space("Work", None).unwrap();
+        let people = db.create_template_folder(&space.id, "People").unwrap();
+        db.create_template_folder(&space.id, "People / Admin")
+            .unwrap();
+        db.create_template_folder(&space.id, "Other").unwrap();
+        add_template(&db, &space.id, "List people", "People");
+        add_template(&db, &space.id, "List admins", "People / Admin");
+
+        let rename = db
+            .rename_template_folder(&people.id, "Contacts / People")
+            .unwrap();
+        assert_eq!(rename.old_path, "People");
+        assert_eq!(rename.folder.path, "Contacts / People");
+        assert_eq!(rename.moved_template_ids.len(), 2);
+
+        let paths: Vec<String> = db
+            .list_template_folders(&space.id)
+            .unwrap()
+            .into_iter()
+            .map(|f| f.path)
+            .collect();
+        assert!(
+            paths.contains(&"Contacts / People".to_string()),
+            "{paths:?}"
+        );
+        assert!(
+            paths.contains(&"Contacts / People / Admin".to_string()),
+            "{paths:?}"
+        );
+        assert!(paths.contains(&"Contacts".to_string()), "{paths:?}");
+        let folders: Vec<String> = db
+            .list_templates(&space.id)
+            .unwrap()
+            .into_iter()
+            .map(|t| t.folder)
+            .collect();
+        assert_eq!(
+            folders,
+            vec!["Contacts / People", "Contacts / People / Admin"]
+        );
+
+        // Collisions and moving a folder inside itself are refused.
+        let err = db.rename_template_folder(&people.id, "Other").unwrap_err();
+        assert!(matches!(err, StorageError::Validation(_)), "{err:?}");
+        let err = db
+            .rename_template_folder(&people.id, "Contacts / People / Deep")
+            .unwrap_err();
+        assert!(matches!(err, StorageError::Validation(_)), "{err:?}");
+    }
+
+    #[test]
+    fn only_empty_folders_can_be_deleted() {
+        let db = DatabaseManager::in_memory().unwrap();
+        let space = db.create_space("Work", None).unwrap();
+        let parent = db.create_template_folder(&space.id, "Contacts").unwrap();
+        let child = db
+            .create_template_folder(&space.id, "Contacts / Admin")
+            .unwrap();
+        let tpl = add_template(&db, &space.id, "List admins", "Contacts / Admin");
+
+        let err = db.delete_template_folder(&parent.id).unwrap_err();
+        assert!(matches!(err, StorageError::Validation(_)), "{err:?}");
+        let err = db.delete_template_folder(&child.id).unwrap_err();
+        assert!(matches!(err, StorageError::Validation(_)), "{err:?}");
+
+        db.arrange_templates(
+            &space.id,
+            &[TemplateOrderInput {
+                id: tpl.id.clone(),
+                folder: "".into(),
+                sort_order: 0,
+            }],
+        )
+        .unwrap();
+        db.delete_template_folder(&child.id).unwrap();
+        db.delete_template_folder(&parent.id).unwrap();
+        assert!(db.list_template_folders(&space.id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn arranging_folders_and_templates_persists_order() {
+        let db = DatabaseManager::in_memory().unwrap();
+        let space = db.create_space("Work", None).unwrap();
+        db.create_template_folder(&space.id, "A").unwrap();
+        db.create_template_folder(&space.id, "B").unwrap();
+        db.create_template_folder(&space.id, "C").unwrap();
+        let first = add_template(&db, &space.id, "First", "A");
+        let second = add_template(&db, &space.id, "Second", "A");
+        let third = add_template(&db, &space.id, "Third", "B");
+
+        db.arrange_template_folders(
+            &space.id,
+            &["C".to_string(), "A".to_string(), "B".to_string()],
+        )
+        .unwrap();
+        let paths: Vec<String> = db
+            .list_template_folders(&space.id)
+            .unwrap()
+            .into_iter()
+            .map(|f| f.path)
+            .collect();
+        assert_eq!(paths, vec!["C", "A", "B"]);
+
+        // Drag `second` to the top of A and `third` into A at the bottom.
+        let moved = db
+            .arrange_templates(
+                &space.id,
+                &[
+                    TemplateOrderInput {
+                        id: second.id.clone(),
+                        folder: "A".into(),
+                        sort_order: 0,
+                    },
+                    TemplateOrderInput {
+                        id: first.id.clone(),
+                        folder: "A".into(),
+                        sort_order: 1,
+                    },
+                    TemplateOrderInput {
+                        id: third.id.clone(),
+                        folder: "A".into(),
+                        sort_order: 2,
+                    },
+                ],
+            )
+            .unwrap();
+        assert_eq!(moved, vec![third.id.clone()]);
+
+        let folders: Vec<String> = db
+            .list_templates(&space.id)
+            .unwrap()
+            .into_iter()
+            .map(|t| t.folder)
+            .collect();
+        assert_eq!(folders, vec!["A", "A", "A"]);
+        let ordered: Vec<String> = db
+            .list_templates(&space.id)
+            .unwrap()
+            .into_iter()
+            .map(|t| t.name)
+            .collect();
+        assert_eq!(ordered, vec!["Second", "First", "Third"]);
+    }
+
+    #[test]
+    fn reordering_tabs_persists_sidebar_order() {
+        let db = DatabaseManager::in_memory().unwrap();
+        let space = db.create_space("Work", None).unwrap();
+        let mut ids = Vec::new();
+        for _ in 0..3 {
+            ids.push(
+                db.create_tab(CreateTabInput {
+                    space_id: space.id.clone(),
+                    template_id: None,
+                    template_name: None,
+                    request: json!({}),
+                    param_values: json!({}),
+                })
+                .unwrap()
+                .id,
+            );
+        }
+        db.reorder_tabs(&space.id, &[ids[0].clone(), ids[2].clone(), ids[1].clone()])
+            .unwrap();
+        let order: Vec<String> = db
+            .list_tabs(&space.id)
+            .unwrap()
+            .into_iter()
+            .map(|t| t.id)
+            .collect();
+        assert_eq!(order, vec![ids[0].clone(), ids[2].clone(), ids[1].clone()]);
     }
 
     #[test]

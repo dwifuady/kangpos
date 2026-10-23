@@ -33,7 +33,7 @@ It keeps Larik's model of **workspaces → tabs**, but a new tab starts from a *
    - The body's JSON check accepts placeholders in both positions. If the body is no longer valid JSON once values are filled in, Send shows a warning (and still sends).
 6. **Tab names come from the template plus a key value,** e.g. `Get contact · 10045`. The key value is the first required param that has a value, or else the first param that has one. Renaming a tab by hand (double-click) pins its title.
 7. **The template picker is a command palette.** Ctrl+T / Ctrl+N → type to filter → Enter. **Blank request** is always the first option.
-8. **No collection tree.** Templates are grouped by `folder` (a path such as `Contacts / Admin`) in the picker and in the sidebar's Templates view.
+8. **No collection tree.** Templates are grouped by `folder` (a path such as `Contacts / Admin`) in the picker and in the sidebar's Templates view. Folders themselves are rows, so an empty folder can exist, be renamed and be reordered; in the Templates view drag a template to move it between folders, drag a folder header to reorder folders, and right-click anywhere for **New folder**.
 
 ## Import
 
@@ -59,6 +59,7 @@ Same stack as Larik: **Tauri 2 + Rust**, **React 19 + TypeScript + Vite**, **Tai
 spaces(id, name, color, active_environment_id, sync_dir NULL, sort_order, created_at, updated_at)
 environments(id, space_id, name, variables JSON, file_path NULL, sort_order, created_at, updated_at)
 templates(id, space_id, name, folder, request JSON, file_path NULL, sort_order, created_at, updated_at)
+template_folders(id, space_id, path, sort_order, created_at, updated_at)   -- sidebar folder order, empty folders included
 tabs(id, space_id, template_id NULL, template_name NULL, custom_title NULL,
      request JSON, param_values JSON, response JSON NULL, is_pinned, sort_order, created_at, updated_at)
 app_state(key, value)            -- last space, last tab, theme, sidebar width
@@ -127,6 +128,7 @@ environments/dev.yaml            one file per environment; secret values left ou
 
 - **Once linked, the folder is the source of truth** and SQLite is a cache. Rust (`src-tauri/src/sync.rs`) watches the folder (`notify`, 400 ms debounce), reloads what changed and emits `kangpos://sync`. The UI then reloads templates and environments. Open tabs are snapshots, so a `git pull` never changes them.
 - **Writes go both ways under one lock:** a change in the app updates SQLite, then writes the file (temp file + rename). Renaming or moving a template moves its file and removes empty folders. Reloading after our own write finds nothing to change, so there is no echo loop.
+- **Folders are directories.** Every folder row maps to a directory, empty ones included, so an empty folder survives a reload and shows up in the sidebar. A directory added by hand becomes a folder; a directory that disappears drops its folder row. Folder order is SQLite-only, like template order.
 - **Stable diffs:** fixed key order, empty values left out (`body`/`auth` of type none, empty lists), JSON bodies written as `|-` blocks. Number-looking strings stay quoted; hand-written `value: 123` is read back as a string.
 - **Ids live in the files**, so renaming a file doesn't break a tab's "Update template". A hand-written file without an `id` gets one written back. Duplicate ids, or ids used by another space, are reported per file.
 - **Nothing is lost on bad files:** a file that doesn't parse (e.g. a merge conflict) is listed in the space's sync status, and its template keeps the last good version. Only a file that is gone deletes its template. A missing folder only shows a warning.
@@ -137,8 +139,8 @@ environments/dev.yaml            one file per environment; secret values left ou
 
 - Spaces (create, rename, recolour, delete, switch)
 - Environments (CRUD, active per space, editor modal)
-- Templates (picker, sidebar list grouped by folder, rename/move/delete, save/update from tab)
-- Tabs (create from template/blank, params form, autosave, rename, pin, close, restore on restart)
+- Templates (picker, sidebar list grouped by folder, new/rename/delete folder, drag to reorder or move, rename/move/delete template, save/update from tab)
+- Tabs (create from template/blank, params form, autosave, rename, pin, drag to reorder, close, restore on restart)
 - Request editor: method + URL bar, Params / Query / Headers / Body / Auth sections
 - Response viewer: status, time, size, pretty body (Monaco), headers
 - Import: Postman collection, Postman environment, OpenAPI 3 / Swagger 2 (JSON/YAML)
