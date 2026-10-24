@@ -52,6 +52,11 @@ Same stack as Larik: **Tauri 2 + Rust**, **React 19 + TypeScript + Vite**, **Tai
 - **Rust is thin.** It handles SQLite persistence, sends HTTP (`reqwest` + rustls, so there's no CORS, and each request can set a timeout, redirect policy and TLS verification), handles cancellation, and reads files for import (with a size limit).
 - **TypeScript owns request semantics:** variable resolution, auth → headers, URL-encoded bodies, importers, cURL export. These are pure functions with unit tests.
 - Request definitions are stored as one JSON column (`request`) on templates and tabs, so the request shape can change without SQLite migrations.
+- **Sidebar drag-and-drop is HTML5 DOM drag**, not Tauri's file drop. `tauri.conf.json` sets
+  `dragDropEnabled: false` on the window: with it on (the default), wry replaces the WebView2 drop
+  target with its own (which only understands dropped files) so `dragstart`/`dragover`/`drop` never
+  reach the page on Windows. Turning it on again also turns reordering off, and nothing in the app
+  uses OS file drops.
 
 ### Storage (SQLite, `%APPDATA%/com.kangpos.app/kangpos.db`)
 
