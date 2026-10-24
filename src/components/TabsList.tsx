@@ -237,7 +237,9 @@ export function TabsList() {
         onDragLeave={() => setDropTarget(prev => (prev?.id === tab.id ? null : prev))}
         onDrop={e => {
           e.preventDefault();
-          if (dropTarget?.id === tab.id && sameGroup) dropTab(tab.id, dropTarget.edge === 'after');
+          // The zone is read from the event, so a drop never depends on a
+          // previous dragover render having committed.
+          if (sameGroup) dropTab(tab.id, dropEdgeAt(e) === 'after');
         }}
         className={`rounded-md ${dropEdgeClass(edge)} ${dragId === tab.id ? 'opacity-40' : ''}`}
       >
